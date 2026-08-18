@@ -1,0 +1,24 @@
+{
+  "name": "iqra-expertise-terrain",
+  "version": "1.0.0",
+  "description": "Application de collecte terrain pour expertise immobiliere - IQRA Expertise",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.1",
+    "better-sqlite3": "^11.3.0",
+    "multer": "^2.0.0",
+    "nodemailer": "^6.9.14",
+    "dotenv": "^16.4.5"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true
+  }
+}
