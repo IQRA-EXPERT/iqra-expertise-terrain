@@ -409,6 +409,8 @@ function screenExpertDetail(d) {
     <div class="section-title">Traitement de l'expert</div>
     ${field("Notes d'analyse", "e-expertNotes", d.expertNotes, { textarea: true, showOptional: true })}
     ${field("Prix de référence retenu (FCFA/m²)", "e-prixReference", d.prixReference, { showOptional: true })}
+    <button type="button" id="btn-prix-reference" style="margin-bottom:16px">Consulter les prix de référence (dossiers similaires)</button>
+    <div id="prix-reference-result" style="margin-bottom:16px"></div>
     ${field("Méthode d'évaluation", "e-methodeEvaluation", d.methodeEvaluation, { showOptional: true })}
     ${field("Conclusion", "e-conclusion", d.conclusion, { textarea: true, showOptional: true })}
     <div class="btn-row">
@@ -667,6 +669,26 @@ async function render() {
       const d = state.dossiers.find((x) => x.id === state.activeDossierId);
       app.innerHTML = screenExpertDetail(d);
       document.getElementById("btn-back-expert").onclick = () => { state.activeDossierId = null; render(); };
+      document.getElementById("btn-prix-reference").onclick = async () => {
+        const box = document.getElementById("prix-reference-result");
+        box.innerHTML = '<div class="muted">Recherche…</div>';
+        try {
+          const params = new URLSearchParams();
+          if (d.commune) params.set("commune", d.commune);
+          if (d.typeBien) params.set("typeBien", d.typeBien);
+          const rows = await api(`/prix-reference?${params.toString()}`);
+          const others = rows.filter((r) => r.id !== d.id);
+          box.innerHTML = others.length === 0
+            ? '<div class="muted">Aucun dossier comparable trouvé (même commune / type de bien).</div>'
+            : `<div class="card">${others.map((r) => `
+              <div class="list-row"><div>
+                <div style="font-weight:600">${esc(r.numeroRapport) || "—"} — ${esc(r.commune)}${r.quartier ? ", " + esc(r.quartier) : ""}</div>
+                <div class="muted">${esc(r.typeBien)} · ${esc(r.superficie) || "?"} m² · ${esc(r.methodeEvaluation) || "—"}</div>
+              </div><div style="font-weight:600">${esc(r.prixReference)} FCFA/m²</div></div>`).join("")}</div>`;
+        } catch (e) {
+          box.innerHTML = `<div class="error-text" style="display:block">${esc(e.message)}</div>`;
+        }
+      };
       document.getElementById("btn-save-expert").onclick = async () => {
         let updated = collectExpertForm(d);
         if (updated.statut === "envoye") updated.statut = "en_traitement";

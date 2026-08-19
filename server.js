@@ -314,7 +314,7 @@ app.post("/api/requisitions", requireExpert, ah(async (req, res) => {
   res.json(r);
 }));
 
-app.patch("/api/requisitions/:id", (req, res) => {
+app.patch("/api/requisitions/:id", requireExpert, (req, res) => {
   const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Introuvable" });
   const statut = req.body.statut || existing.statut;
@@ -334,6 +334,21 @@ app.get("/api/dossiers/:id", (req, res) => {
   const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Introuvable" });
   res.json(rowToDossier(row));
+});
+
+// =========================================================
+// API: Base de prix de référence (expertises terminées)
+// =========================================================
+app.get("/api/prix-reference", requireExpert, (req, res) => {
+  const { commune, typeBien } = req.query;
+  let sql = `SELECT id, commune, quartier, region, typeBien, superficie, prixReference, methodeEvaluation, dateVisite, numeroRapport
+             FROM dossiers WHERE statut = 'rapport_genere' AND prixReference IS NOT NULL AND prixReference != ''`;
+  const params = [];
+  if (commune) { sql += " AND commune = ?"; params.push(commune); }
+  if (typeBien) { sql += " AND typeBien = ?"; params.push(typeBien); }
+  sql += " ORDER BY dateVisite DESC LIMIT 50";
+  const rows = db.prepare(sql).all(...params);
+  res.json(rows);
 });
 
 function upsertDossier(b) {
