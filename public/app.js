@@ -21,7 +21,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 async function api(path, opts) {
   const res = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (res.status === 401) {
+  if (res.status === 401 && path !== "/login") {
     state.user = null; state.role = null; state.agentName = "";
     render();
     throw new Error("Session expirée, veuillez vous reconnecter.");
