@@ -478,8 +478,7 @@ function attachFicheHandlers(d) {
     row.querySelector(".pc-superficie").oninput = (e) => (p.superficie = e.target.value);
   });
 
-  document.getElementById("btn-take-photo").onclick = async () => {
-    if (!d.id) { const nd = collectFicheForm(d); const saved = await saveDossier(nd); state.editing = saved; d = saved; }
+  document.getElementById("btn-take-photo").onclick = () => {
     document.getElementById("f-photo-input").click();
   };
   document.getElementById("f-photo-input").onchange = async (e) => {
