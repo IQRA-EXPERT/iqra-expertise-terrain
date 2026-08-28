@@ -83,6 +83,18 @@ function emptyDossier(req) {
   };
 }
 
+const REGIONS_MALI = ["", "District de Bamako", "Kayes", "Koulikoro", "Sikasso", "Ségou", "Mopti", "Tombouctou", "Gao", "Kidal", "Taoudénit", "Ménaka", "Nioro", "Kita", "Dioïla", "Nara", "Bougouni", "Koutiala", "San", "Douentza", "Bandiagara"];
+function uniqueValues(prop) {
+  return Array.from(new Set(state.dossiers.map((d) => d[prop]).filter(Boolean))).sort();
+}
+function fieldWithDatalist(label, id, value, suggestions, opts = {}) {
+  const listId = id + "-list";
+  const tagHtml = opts.required ? ' <span class="required">*</span>' : opts.showOptional ? ' <span class="optional">(facultatif)</span>' : "";
+  return `<label class="field"><span class="field-label">${label}${tagHtml}</span>
+    <input id="${id}" list="${listId}" value="${esc(value)}" />
+    <datalist id="${listId}">${suggestions.map((s) => `<option value="${esc(s)}"></option>`).join("")}</datalist>
+  </label>`;
+}
 function field(label, id, value, opts = {}) {
   const tag = opts.textarea ? "textarea" : "input";
   const type = opts.type || "text";
@@ -269,10 +281,10 @@ function screenFicheForm(d) {
     ${indicateurBlock(d)}
 
     <div class="section-title">Relevés de terrain</div>
-    ${field("Commune", "f-commune", d.commune)}
-    ${field("Quartier / Localité", "f-quartier", d.quartier)}
-    ${field("Cercle", "f-cercle", d.cercle, { showOptional: true })}
-    ${field("Région", "f-region", d.region, { showOptional: true })}
+    ${fieldWithDatalist("Commune", "f-commune", d.commune, uniqueValues("commune"))}
+    ${fieldWithDatalist("Quartier / Localité", "f-quartier", d.quartier, uniqueValues("quartier"))}
+    ${fieldWithDatalist("Cercle", "f-cercle", d.cercle, uniqueValues("cercle"), { showOptional: true })}
+    ${field("Région", "f-region", d.region, { select: REGIONS_MALI, showOptional: true })}
     ${field("Bamako District (si applicable)", "f-bamakoDistrict", d.bamakoDistrict, { showOptional: true })}
     ${field("Adresse / repère", "f-adresse", d.adresse)}
     ${locBlock(d)}
