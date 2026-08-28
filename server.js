@@ -240,22 +240,6 @@ app.get("/api/me", requireAuth, (req, res) => {
   res.json(user);
 });
 
-// TEMPORAIRE — à retirer après usage. Protégé par RESET_TOKEN (variable Railway).
-app.post("/api/admin/reset-expert-password", (req, res) => {
-  const token = req.headers["x-reset-token"];
-  if (!process.env.RESET_TOKEN || token !== process.env.RESET_TOKEN) {
-    return res.status(403).json({ error: "Non autorisé" });
-  }
-  const { username, password } = req.body || {};
-  if (!username || !password || password.length < 6) {
-    return res.status(400).json({ error: "username et password (6 caractères min.) requis" });
-  }
-  const expert = db.prepare("SELECT id FROM users WHERE role = 'expert' ORDER BY createdAt ASC LIMIT 1").get();
-  if (!expert) return res.status(404).json({ error: "Aucun compte expert trouvé" });
-  db.prepare("UPDATE users SET username = ?, passwordHash = ?, active = 1 WHERE id = ?").run(username, hashPassword(password), expert.id);
-  res.json({ ok: true, username });
-});
-
 app.use("/api", requireAuth);
 
 // =========================================================
