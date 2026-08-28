@@ -71,7 +71,7 @@ function emptyDossier(req) {
     commune: "", quartier: "", cercle: "", region: "", bamakoDistrict: "", adresse: "",
     lat: null, lon: null, utm: null,
     typeTitre: "Titre Foncier", numeroTitre: "", numeroRequisitionCadastrale: "", titulaire: "",
-    natureParcelle: [], etatTerrain: [], vrd: [], difficultesRencontrees: "",
+    natureParcelle: [], etatTerrain: [], vrd: [], etatBatiment: "Bon état", difficultesRencontrees: "",
     longueurParcelle: "", largeurParcelle: "", hauteurMur: "", hauteurAcrotere: "",
     gpsAngles: { P1: null, P2: null, P3: null, P4: null, Centre: null },
     pieces: [], annexes: { fosseSeptiqueQte: "", lavoirM2: "", paveBetonM2: "", dalleBetonM2: "", devanture: "", clotureHauteurMl: "", regardsQte: "" },
@@ -294,6 +294,7 @@ function screenFicheForm(d) {
     ${checkboxGroup("Nature de la parcelle", "cb-nature", ["Habitation", "Champ", "Usine", "Ferme Agro"], d.natureParcelle)}
     ${checkboxGroup("État du terrain", "cb-etat", ["Bâtie", "Vide", "Terrain bâti", "Incendié", "Effondré", "Plat", "Accidenté", "Rocheux", "Inondé"], d.etatTerrain)}
     ${checkboxGroup("Voirie et réseaux divers (VRD)", "cb-vrd", ["Piste", "Goudron", "Pavé", "Collecteur", "Caniveau", "EDM", "SOMAGEP", "Forage"], d.vrd)}
+    ${field("État du bâtiment", "f-etatBatiment", d.etatBatiment, { select: ["Neuf", "Bon état", "État moyen", "Mauvais état", "Vétuste", "En ruine"] })}
     ${field("Difficultés rencontrées sur le site", "f-difficultesRencontrees", d.difficultesRencontrees, { textarea: true, showOptional: true })}
 
     ${piecesBlock(d)}
@@ -336,7 +337,7 @@ function collectFicheForm(base) {
     longueurParcelle: g("f-longueurParcelle"), largeurParcelle: g("f-largeurParcelle"),
     hauteurMur: g("f-hauteurMur"), hauteurAcrotere: g("f-hauteurAcrotere"),
     typeTitre: g("f-typeTitre"), numeroTitre: g("f-numeroTitre"), numeroRequisitionCadastrale: g("f-numeroRequisitionCadastrale"), titulaire: g("f-titulaire"),
-    natureParcelle: collectChecked("cb-nature"), etatTerrain: collectChecked("cb-etat"), vrd: collectChecked("cb-vrd"),
+    natureParcelle: collectChecked("cb-nature"), etatTerrain: collectChecked("cb-etat"), vrd: collectChecked("cb-vrd"), etatBatiment: g("f-etatBatiment"),
     difficultesRencontrees: g("f-difficultesRencontrees"),
     annexes: { fosseSeptiqueQte: g("f-fosseSeptiqueQte"), lavoirM2: g("f-lavoirM2"), paveBetonM2: g("f-paveBetonM2"), dalleBetonM2: g("f-dalleBetonM2"), devanture: g("f-devanture"), clotureHauteurMl: g("f-clotureHauteurMl"), regardsQte: g("f-regardsQte") },
     typeBien: g("f-typeBien"), superficie: g("f-superficie"), description: g("f-description"), observationsAgent: g("f-observationsAgent"),
@@ -421,6 +422,32 @@ function screenManageUsers() {
   </div>`;
 }
 
+const COEFFICIENTS_ETAT_BATIMENT = { "Neuf": 1.0, "Bon état": 0.9, "État moyen": 0.75, "Mauvais état": 0.55, "Vétuste": 0.4, "En ruine": 0.2 };
+function expertPiecesBlock(d) {
+  let totalSuperficie = 0, totalMontant = 0;
+  const rows = d.pieces.map((p, i) => {
+    const qte = parseFloat(p.quantite) || 0, superficie = parseFloat(p.superficie) || 0, prixUnitaire = parseFloat(p.prixUnitaire) || 0;
+    const montant = qte * superficie * prixUnitaire;
+    totalSuperficie += qte * superficie; totalMontant += montant;
+    return `<div class="ep-piece-row" data-id="${p.id}">
+      <div>${i + 1}</div><div>${esc(p.designation) || "—"}</div><div>${esc(p.quantite) || "—"}</div><div>${esc(p.superficie) || "—"}</div>
+      <input class="ep-prixUnitaire" value="${p.prixUnitaire || ""}" placeholder="FCFA/m²" />
+      <div class="ep-montant">${montant ? montant.toLocaleString("fr-FR") : "—"}</div></div>`;
+  }).join("");
+  const coefficient = coefficientEtatBatiment(d.etatBatiment);
+  return `<div class="card">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px">Calcul des pièces (prix unitaire)</div>
+    ${d.pieces.length ? `<div class="ep-piece-header"><div>N°</div><div>Désignation</div><div>Qté</div><div>Superficie</div><div>Prix unitaire</div><div>Montant</div></div>
+      <div>${rows}</div>
+      <div class="ep-piece-row" style="font-weight:600;margin-top:6px"><div></div><div>TOTAL</div><div></div><div id="ep-total-superficie">${totalSuperficie.toLocaleString("fr-FR")} m²</div><div></div><div id="ep-total-montant">${totalMontant.toLocaleString("fr-FR")}</div></div>`
+      : '<div class="muted">Aucune pièce renseignée par l\'agent.</div>'}
+    <button type="button" id="btn-download-excel" style="margin-top:12px">⬇ Télécharger le tableau Excel (pièces + calcul global)</button>
+    <div class="muted" style="margin-top:6px">Coefficient appliqué selon l'état du bâtiment (${esc(d.etatBatiment) || "—"}) : ${coefficient}</div>
+  </div>`;
+}
+function coefficientEtatBatiment(etat) {
+  return COEFFICIENTS_ETAT_BATIMENT[etat] != null ? COEFFICIENTS_ETAT_BATIMENT[etat] : 1.0;
+}
 function screenExpertDetail(d) {
   return `<div>
     <button id="btn-back-expert" style="margin-bottom:1rem">← Retour à la liste</button>
@@ -429,9 +456,14 @@ function screenExpertDetail(d) {
     ${previewHTML(d, "agent")}
     <div class="section-title">Traitement de l'expert</div>
     ${field("Notes d'analyse", "e-expertNotes", d.expertNotes, { textarea: true, showOptional: true })}
-    ${field("Prix de référence retenu (FCFA/m²)", "e-prixReference", d.prixReference, { showOptional: true })}
+    ${field("Prix de référence (comparables, FCFA/m²)", "e-prixReference", d.prixReference, { showOptional: true })}
     <button type="button" id="btn-prix-reference" style="margin-bottom:16px">Consulter les prix de référence (dossiers similaires)</button>
     <div id="prix-reference-result" style="margin-bottom:16px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${field("Prix de base (FCFA/m²)", "e-prixBase", d.prixBase, { showOptional: true })}
+      ${field("Prix au choix de l'expert (FCFA/m²)", "e-prixChoisi", d.prixChoisi, { showOptional: true })}
+    </div>
+    ${expertPiecesBlock(d)}
     ${field("Méthode d'évaluation", "e-methodeEvaluation", d.methodeEvaluation, { showOptional: true })}
     ${field("Conclusion", "e-conclusion", d.conclusion, { textarea: true, showOptional: true })}
     <div class="btn-row">
@@ -442,7 +474,7 @@ function screenExpertDetail(d) {
 }
 function collectExpertForm(base) {
   const g = (id) => document.getElementById(id).value;
-  return { ...base, expertNotes: g("e-expertNotes"), prixReference: g("e-prixReference"), methodeEvaluation: g("e-methodeEvaluation"), conclusion: g("e-conclusion"), dernierModifiePar: "Expert" };
+  return { ...base, expertNotes: g("e-expertNotes"), prixReference: g("e-prixReference"), prixBase: g("e-prixBase"), prixChoisi: g("e-prixChoisi"), methodeEvaluation: g("e-methodeEvaluation"), conclusion: g("e-conclusion"), dernierModifiePar: "Expert" };
 }
 
 function printPreview() {
@@ -724,6 +756,24 @@ async function render() {
         } catch (e) {
           box.innerHTML = `<div class="error-text" style="display:block">${esc(e.message)}</div>`;
         }
+      };
+      document.querySelectorAll(".ep-piece-row[data-id]").forEach((row) => {
+        const p = d.pieces.find((x) => x.id === row.getAttribute("data-id"));
+        if (!p) return;
+        row.querySelector(".ep-prixUnitaire").oninput = (e) => {
+          p.prixUnitaire = e.target.value;
+          const qte = parseFloat(p.quantite) || 0, superficie = parseFloat(p.superficie) || 0, prixUnitaire = parseFloat(p.prixUnitaire) || 0;
+          const montant = qte * superficie * prixUnitaire;
+          row.querySelector(".ep-montant").textContent = montant ? montant.toLocaleString("fr-FR") : "—";
+          const totalMontant = d.pieces.reduce((sum, x) => sum + (parseFloat(x.quantite) || 0) * (parseFloat(x.superficie) || 0) * (parseFloat(x.prixUnitaire) || 0), 0);
+          const totalEl = document.getElementById("ep-total-montant");
+          if (totalEl) totalEl.textContent = totalMontant.toLocaleString("fr-FR");
+        };
+      });
+      document.getElementById("btn-download-excel").onclick = async () => {
+        const updated = collectExpertForm(d);
+        const saved = await saveDossier(updated);
+        window.open(`${API}/dossiers/${saved.id}/export.xlsx`, "_blank");
       };
       document.getElementById("btn-save-expert").onclick = async () => {
         let updated = collectExpertForm(d);

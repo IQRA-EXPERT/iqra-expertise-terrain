@@ -7,6 +7,7 @@ const fs = require("fs");
 const multer = require("multer");
 const Database = require("better-sqlite3");
 const nodemailer = require("nodemailer");
+const ExcelJS = require("exceljs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS dossiers (
   commune TEXT, quartier TEXT, cercle TEXT, region TEXT, bamakoDistrict TEXT, adresse TEXT,
   lat REAL, lon REAL, utmJson TEXT,
   typeTitre TEXT, numeroTitre TEXT, numeroRequisitionCadastrale TEXT, titulaire TEXT,
-  natureParcelleJson TEXT, etatTerrainJson TEXT, vrdJson TEXT, difficultesRencontrees TEXT,
+  natureParcelleJson TEXT, etatTerrainJson TEXT, vrdJson TEXT, etatBatiment TEXT, difficultesRencontrees TEXT,
   longueurParcelle TEXT, largeurParcelle TEXT, hauteurMur TEXT, hauteurAcrotere TEXT,
   gpsAnglesJson TEXT,
   piecesJson TEXT,
@@ -85,6 +86,7 @@ ensureColumn("dossiers", "hauteurMur", "TEXT");
 ensureColumn("dossiers", "hauteurAcrotere", "TEXT");
 ensureColumn("dossiers", "prixBase", "TEXT");
 ensureColumn("dossiers", "prixChoisi", "TEXT");
+ensureColumn("dossiers", "etatBatiment", "TEXT");
 ensureColumn("requisitions", "fichierRequisitionPath", "TEXT");
 
 // ---------- Uploads (photos) ----------
@@ -180,6 +182,18 @@ const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch
   else console.log("Mot de passe : celui défini dans EXPERT_PASSWORD (.env)");
   console.log("=".repeat(60));
 })();
+
+const COEFFICIENTS_ETAT_BATIMENT = {
+  "Neuf": 1.0,
+  "Bon état": 0.9,
+  "État moyen": 0.75,
+  "Mauvais état": 0.55,
+  "Vétuste": 0.4,
+  "En ruine": 0.2,
+};
+function coefficientEtatBatiment(etat) {
+  return COEFFICIENTS_ETAT_BATIMENT[etat] != null ? COEFFICIENTS_ETAT_BATIMENT[etat] : 1.0;
+}
 
 function rowToRequisition(r) {
   return r;
@@ -348,6 +362,59 @@ app.get("/api/dossiers/:id", (req, res) => {
   res.json(rowToDossier(row));
 });
 
+app.get("/api/dossiers/:id/export.xlsx", async (req, res) => {
+  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Introuvable" });
+  const d = rowToDossier(row);
+
+  const workbook = new ExcelJS.Workbook();
+  const piecesSheet = workbook.addWorksheet("Pièces");
+  piecesSheet.columns = [
+    { header: "N°", key: "n", width: 6 },
+    { header: "Désignation", key: "designation", width: 26 },
+    { header: "Niveau", key: "niveau", width: 12 },
+    { header: "Quantité", key: "quantite", width: 10 },
+    { header: "Superficie (m²)", key: "superficie", width: 16 },
+    { header: "Prix unitaire (FCFA)", key: "prixUnitaire", width: 18 },
+    { header: "Montant (FCFA)", key: "montant", width: 18 },
+  ];
+  piecesSheet.getRow(1).font = { bold: true };
+  let totalSuperficie = 0, totalMontant = 0;
+  d.pieces.forEach((p, i) => {
+    const qte = parseFloat(p.quantite) || 0;
+    const superficie = parseFloat(p.superficie) || 0;
+    const prixUnitaire = parseFloat(p.prixUnitaire) || 0;
+    const montant = qte * superficie * prixUnitaire;
+    totalSuperficie += qte * superficie;
+    totalMontant += montant;
+    piecesSheet.addRow({ n: i + 1, designation: p.designation || "", niveau: p.niveau || "", quantite: qte, superficie, prixUnitaire, montant });
+  });
+  const totalRow = piecesSheet.addRow({ designation: "TOTAL", superficie: totalSuperficie, montant: totalMontant });
+  totalRow.font = { bold: true };
+
+  const coefficient = coefficientEtatBatiment(d.etatBatiment);
+  const prixRetenu = parseFloat(d.prixChoisi) || parseFloat(d.prixBase) || 0;
+  const valeurEstimee = totalSuperficie * prixRetenu * coefficient;
+  const calcSheet = workbook.addWorksheet("Calcul global");
+  calcSheet.columns = [{ header: "", key: "label", width: 34 }, { header: "", key: "value", width: 24 }];
+  [
+    ["Dossier", `${d.numeroRapport || "—"} — ${d.nomSite || d.commune || ""}`],
+    ["Superficie bâtie totale (m²)", totalSuperficie],
+    ["État du bâtiment", d.etatBatiment || "—"],
+    ["Coefficient appliqué", coefficient],
+    ["Prix de base (FCFA/m²)", d.prixBase || "—"],
+    ["Prix choisi par l'expert (FCFA/m²)", d.prixChoisi || "—"],
+    ["Prix retenu pour le calcul (FCFA/m²)", prixRetenu],
+    ["Valeur estimée (FCFA)", valeurEstimee],
+  ].forEach((r) => calcSheet.addRow({ label: r[0], value: r[1] }));
+  calcSheet.getColumn(1).font = { bold: true };
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="dossier-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.xlsx"`);
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
 // =========================================================
 // API: Base de prix de référence (expertises terminées)
 // =========================================================
@@ -402,6 +469,7 @@ function upsertDossier(b) {
     titulaire: b.titulaire || "",
     natureParcelleJson: JSON.stringify(b.natureParcelle || []),
     etatTerrainJson: JSON.stringify(b.etatTerrain || []),
+    etatBatiment: b.etatBatiment || "",
     vrdJson: JSON.stringify(b.vrd || []),
     difficultesRencontrees: b.difficultesRencontrees || "",
     longueurParcelle: b.longueurParcelle || "",
