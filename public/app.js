@@ -156,9 +156,37 @@ function screenRequisitionForm(r) {
     <div class="section-title">Mission</div>
     ${field("Site à visiter (commune / quartier)", "r-siteIndicatif", r.siteIndicatif, { required: true })}
     ${field("Instructions pour l'agent", "r-instructionsExpert", r.instructionsExpert, { textarea: true, showOptional: true })}
+    <label class="field"><span class="field-label">Document de réquisition original (scanné, facultatif)</span>
+      <input type="file" id="r-fichierRequisition" accept="image/*,.pdf" /></label>
+    ${r.fichierRequisitionPath ? `<div class="muted" style="margin-bottom:12px"><a class="link" href="/uploads/${esc(r.fichierRequisitionPath)}" target="_blank">📎 Voir le document déjà joint ↗</a></div>` : ""}
     <div id="req-error" class="error-text" style="display:none"></div>
-    <button class="accent" id="btn-send-requisition">Émettre la réquisition</button>
+    <div class="btn-row">
+      <button type="button" id="btn-download-req-pdf">⬇ Télécharger la fiche (PDF)</button>
+      <button class="accent" id="btn-send-requisition">Émettre la réquisition</button>
+    </div>
   </div>`;
+}
+function printRequisition(r) {
+  const rows = [
+    ["Référence du dossier", r.referenceDossier || "—"],
+    ["Client", r.clientNom || "—"],
+    ["Téléphone du client", r.clientTelephone || "—"],
+    ["Email du client", r.clientEmail || "—"],
+    ["Type de mandant", r.mandantType || "—"],
+    ["Nom du mandant", r.mandantNom || "—"],
+    ["Téléphone du mandant", r.mandantTelephone || "—"],
+    ["Site à visiter", r.siteIndicatif || "—"],
+    ["Instructions pour l'agent", r.instructionsExpert || "—"],
+  ];
+  const html = `<html><head><title>Fiche de réquisition</title><style>body{font-family:sans-serif;padding:24px;color:#111}h1{font-size:18px}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:16px}td{padding:6px 0;vertical-align:top;border-bottom:1px solid #eee}td:first-child{color:#666;width:40%}</style></head>
+    <body><h1>Réquisition à Expert (Ordre de mission) — IQRA Expertise</h1>
+    <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></body></html>`;
+  const w = window.open("", "_blank");
+  if (!w) { alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 300);
 }
 function collectRequisitionForm(base) {
   const g = (id) => document.getElementById(id).value;
@@ -175,7 +203,8 @@ function screenAgentHome() {
     <div class="section-title" style="margin-top:0">Réquisitions en attente (${pending.length})</div>
     ${pending.length === 0 ? '<div class="muted">Aucune réquisition en attente. L\'expert doit émettre un ordre de mission avant toute visite.</div>' : pending.map((r) => `
       <div class="list-row req-row" data-id="${r.id}"><div><div style="font-weight:600">${esc(r.siteIndicatif)}</div>
-      <div class="muted">${esc(r.mandantType)} ${r.mandantNom ? "— " + esc(r.mandantNom) : ""} ${r.clientNom ? "· Client : " + esc(r.clientNom) : ""}</div></div>
+      <div class="muted">${esc(r.mandantType)} ${r.mandantNom ? "— " + esc(r.mandantNom) : ""} ${r.clientNom ? "· Client : " + esc(r.clientNom) : ""}</div>
+      ${r.fichierRequisitionPath ? `<a class="link req-attachment-link" href="/uploads/${esc(r.fichierRequisitionPath)}" target="_blank">📎 Document joint ↗</a>` : ""}</div>
       <button style="pointer-events:none">Démarrer</button></div>`).join("")}
     <div class="section-title">Mes fiches (${mine.length})</div>
     ${mine.length === 0 ? '<div class="muted">Aucune fiche pour le moment.</div>' : mine.map((d) => `
@@ -493,6 +522,7 @@ function printPreview() {
   const node = document.getElementById("printable-preview");
   if (!node) return;
   const w = window.open("", "_blank");
+  if (!w) { alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
   w.document.write(`<html><head><title>Aperçu fiche</title><style>body{font-family:sans-serif;padding:24px;color:#111}table{width:100%;border-collapse:collapse;font-size:13px}td{padding:6px 0;vertical-align:top}td:first-child{color:#666;width:40%}img{border-radius:6px}</style></head><body>${node.innerHTML}</body></html>`);
   w.document.close();
   w.focus();
@@ -690,6 +720,8 @@ async function render() {
         const r = state.requisitions.find((x) => x.id === row.getAttribute("data-id"));
         if (r) { state.editing = emptyDossier(r); render(); }
       };
+      const link = row.querySelector(".req-attachment-link");
+      if (link) link.onclick = (e) => e.stopPropagation();
     });
     document.querySelectorAll(".mine-row").forEach((row) => {
       row.onclick = () => {
@@ -732,11 +764,19 @@ async function render() {
     if (state.newRequisition) {
       app.innerHTML = screenRequisitionForm(state.newRequisition);
       document.getElementById("btn-cancel-req").onclick = () => { state.newRequisition = null; render(); };
+      document.getElementById("btn-download-req-pdf").onclick = () => {
+        printRequisition(collectRequisitionForm(state.newRequisition));
+      };
       document.getElementById("btn-send-requisition").onclick = async () => {
         const r = collectRequisitionForm(state.newRequisition);
         const err = document.getElementById("req-error");
+        const file = document.getElementById("r-fichierRequisition").files[0];
         try {
-          await api("/requisitions", { method: "POST", body: JSON.stringify(r) });
+          const fd = new FormData();
+          Object.entries(r).forEach(([k, v]) => fd.append(k, v == null ? "" : v));
+          if (file) fd.append("fichierRequisition", file);
+          const res = await fetch(`${API}/requisitions`, { method: "POST", body: fd });
+          if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "Erreur serveur"); }
           state.newRequisition = null;
           await loadAll(); render();
         } catch (e) {

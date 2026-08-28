@@ -314,7 +314,7 @@ app.get("/api/requisitions", (req, res) => {
   res.json(rows);
 });
 
-app.post("/api/requisitions", requireExpert, ah(async (req, res) => {
+app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition"), ah(async (req, res) => {
   const b = req.body;
   if (!b.siteIndicatif || (!b.clientTelephone && !b.mandantNom)) {
     return res.status(400).json({ error: "Le site à visiter et un contact (téléphone client ou nom du mandant) sont obligatoires." });
@@ -331,11 +331,12 @@ app.post("/api/requisitions", requireExpert, ah(async (req, res) => {
     mandantTelephone: b.mandantTelephone || "",
     siteIndicatif: b.siteIndicatif,
     instructionsExpert: b.instructionsExpert || "",
+    fichierRequisitionPath: req.file ? req.file.filename : null,
     statut: "en_attente",
   };
   db.prepare(
-    `INSERT INTO requisitions (id,dateCreation,referenceDossier,clientNom,clientTelephone,clientEmail,mandantType,mandantNom,mandantTelephone,siteIndicatif,instructionsExpert,statut)
-     VALUES (@id,@dateCreation,@referenceDossier,@clientNom,@clientTelephone,@clientEmail,@mandantType,@mandantNom,@mandantTelephone,@siteIndicatif,@instructionsExpert,@statut)`
+    `INSERT INTO requisitions (id,dateCreation,referenceDossier,clientNom,clientTelephone,clientEmail,mandantType,mandantNom,mandantTelephone,siteIndicatif,instructionsExpert,fichierRequisitionPath,statut)
+     VALUES (@id,@dateCreation,@referenceDossier,@clientNom,@clientTelephone,@clientEmail,@mandantType,@mandantNom,@mandantTelephone,@siteIndicatif,@instructionsExpert,@fichierRequisitionPath,@statut)`
   ).run(r);
   res.json(r);
 }));
