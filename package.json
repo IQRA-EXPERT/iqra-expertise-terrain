@@ -4,7 +4,7 @@
   "description": "Application de collecte terrain pour expertise immobiliere - IQRA Expertise",
   "main": "server.js",
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "scripts": {
     "start": "node server.js",
