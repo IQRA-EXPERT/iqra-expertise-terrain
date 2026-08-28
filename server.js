@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS requisitions (
   clientNom TEXT, clientTelephone TEXT, clientEmail TEXT,
   mandantType TEXT, mandantNom TEXT, mandantTelephone TEXT,
   siteIndicatif TEXT, instructionsExpert TEXT,
+  fichierRequisitionPath TEXT,
   statut TEXT DEFAULT 'en_attente'
 );
 
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS dossiers (
   lat REAL, lon REAL, utmJson TEXT,
   typeTitre TEXT, numeroTitre TEXT, numeroRequisitionCadastrale TEXT, titulaire TEXT,
   natureParcelleJson TEXT, etatTerrainJson TEXT, vrdJson TEXT, difficultesRencontrees TEXT,
-  longueurParcelle TEXT, largeurParcelle TEXT,
+  longueurParcelle TEXT, largeurParcelle TEXT, hauteurMur TEXT, hauteurAcrotere TEXT,
   gpsAnglesJson TEXT,
   piecesJson TEXT,
   annexesJson TEXT,
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS dossiers (
   heureDebutMission TEXT, heureArriveeSite TEXT, heureFinMission TEXT,
   trackingPointsJson TEXT, distanceParcourue REAL DEFAULT 0,
   statut TEXT DEFAULT 'brouillon',
-  expertNotes TEXT, prixReference TEXT, methodeEvaluation TEXT, conclusion TEXT,
+  expertNotes TEXT, prixReference TEXT, prixBase TEXT, prixChoisi TEXT, methodeEvaluation TEXT, conclusion TEXT,
   dateEnvoi TEXT, dernierModifiePar TEXT
 );
 
@@ -74,6 +75,17 @@ CREATE TABLE IF NOT EXISTS users (
   createdAt TEXT
 );
 `);
+
+// ---------- Migrations (ajout de colonnes sur une base déjà existante) ----------
+function ensureColumn(table, column, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+}
+ensureColumn("dossiers", "hauteurMur", "TEXT");
+ensureColumn("dossiers", "hauteurAcrotere", "TEXT");
+ensureColumn("dossiers", "prixBase", "TEXT");
+ensureColumn("dossiers", "prixChoisi", "TEXT");
+ensureColumn("requisitions", "fichierRequisitionPath", "TEXT");
 
 // ---------- Uploads (photos) ----------
 const storage = multer.diskStorage({
@@ -394,6 +406,8 @@ function upsertDossier(b) {
     difficultesRencontrees: b.difficultesRencontrees || "",
     longueurParcelle: b.longueurParcelle || "",
     largeurParcelle: b.largeurParcelle || "",
+    hauteurMur: b.hauteurMur || "",
+    hauteurAcrotere: b.hauteurAcrotere || "",
     gpsAnglesJson: JSON.stringify(b.gpsAngles || {}),
     piecesJson: JSON.stringify(b.pieces || []),
     annexesJson: JSON.stringify(b.annexes || {}),
@@ -409,6 +423,8 @@ function upsertDossier(b) {
     statut: b.statut || "brouillon",
     expertNotes: b.expertNotes || "",
     prixReference: b.prixReference || "",
+    prixBase: b.prixBase || "",
+    prixChoisi: b.prixChoisi || "",
     methodeEvaluation: b.methodeEvaluation || "",
     conclusion: b.conclusion || "",
     dateEnvoi: b.dateEnvoi || null,

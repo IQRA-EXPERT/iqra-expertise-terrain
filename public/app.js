@@ -72,13 +72,13 @@ function emptyDossier(req) {
     lat: null, lon: null, utm: null,
     typeTitre: "Titre Foncier", numeroTitre: "", numeroRequisitionCadastrale: "", titulaire: "",
     natureParcelle: [], etatTerrain: [], vrd: [], difficultesRencontrees: "",
-    longueurParcelle: "", largeurParcelle: "",
+    longueurParcelle: "", largeurParcelle: "", hauteurMur: "", hauteurAcrotere: "",
     gpsAngles: { P1: null, P2: null, P3: null, P4: null, Centre: null },
     pieces: [], annexes: { fosseSeptiqueQte: "", lavoirM2: "", paveBetonM2: "", dalleBetonM2: "", devanture: "", clotureHauteurMl: "", regardsQte: "" },
     typeBien: "Terrain bâti", superficie: "", description: "", observationsAgent: "", photos: [],
     heureDebutMission: nowISO(), heureArriveeSite: null, heureFinMission: null,
     trackingPoints: [], distanceParcourue: 0,
-    statut: "brouillon", expertNotes: "", prixReference: "", methodeEvaluation: "", conclusion: "",
+    statut: "brouillon", expertNotes: "", prixReference: "", prixBase: "", prixChoisi: "", methodeEvaluation: "", conclusion: "",
     dateEnvoi: null, dernierModifiePar: state.agentName,
   };
 }
@@ -207,13 +207,20 @@ function piecesBlock(d) {
   const rows = d.pieces.map((p) => `<div class="piece-row" data-id="${p.id}">
     <select class="pc-niveau"><option ${p.niveau === "RDC" ? "selected" : ""}>RDC</option><option ${p.niveau === "Étage 1" ? "selected" : ""}>Étage 1</option><option ${p.niveau === "Étage 2" ? "selected" : ""}>Étage 2</option></select>
     <input class="pc-designation" placeholder="ex. Chambre 1" value="${esc(p.designation)}" />
+    <input class="pc-longueur" placeholder="Long. (m)" value="${p.longueur || ""}" />
+    <input class="pc-largeur" placeholder="Larg. (m)" value="${p.largeur || ""}" />
     <input class="pc-quantite" placeholder="Qté" value="${p.quantite || ""}" />
-    <input class="pc-superficie" placeholder="m²" value="${p.superficie || ""}" />
+    <input class="pc-superficie" placeholder="m²" value="${p.superficie || ""}" readonly />
     <button type="button" class="btn-del-piece" data-pid="${p.id}" aria-label="Supprimer">✕</button></div>`).join("");
   return `<div class="card"><div style="font-weight:600;font-size:13px;margin-bottom:8px">Relevé des pièces (par niveau)</div>
-    ${d.pieces.length ? `<div class="piece-header"><div>Niveau</div><div>Désignation</div><div>Qté</div><div>Superficie</div><div></div></div>` : ""}
+    ${d.pieces.length ? `<div class="piece-header"><div>Niveau</div><div>Désignation</div><div>Longueur</div><div>Largeur</div><div>Qté</div><div>Superficie</div><div></div></div>` : ""}
     <div>${rows || '<div class="muted" style="margin-bottom:6px">Aucune pièce ajoutée.</div>'}</div>
-    <button type="button" id="btn-add-piece">+ Ajouter une pièce</button></div>`;
+    <button type="button" id="btn-add-piece">+ Ajouter une pièce</button>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${field("Hauteur des murs (m)", "f-hauteurMur", d.hauteurMur, { showOptional: true })}
+      ${field("Hauteur de l'acrotère (m)", "f-hauteurAcrotere", d.hauteurAcrotere, { showOptional: true })}
+    </div>
+  </div>`;
 }
 function indicateurBlock(d) {
   return `<div class="card accent-border">
@@ -327,6 +334,7 @@ function collectFicheForm(base) {
     indicateurType: g("f-indicateurType"), indicateurNom: g("f-indicateurNom"), indicateurPrenom: g("f-indicateurPrenom"), indicateurTelephone: g("f-indicateurTelephone"),
     commune: g("f-commune"), quartier: g("f-quartier"), cercle: g("f-cercle"), region: g("f-region"), bamakoDistrict: g("f-bamakoDistrict"), adresse: g("f-adresse"),
     longueurParcelle: g("f-longueurParcelle"), largeurParcelle: g("f-largeurParcelle"),
+    hauteurMur: g("f-hauteurMur"), hauteurAcrotere: g("f-hauteurAcrotere"),
     typeTitre: g("f-typeTitre"), numeroTitre: g("f-numeroTitre"), numeroRequisitionCadastrale: g("f-numeroRequisitionCadastrale"), titulaire: g("f-titulaire"),
     natureParcelle: collectChecked("cb-nature"), etatTerrain: collectChecked("cb-etat"), vrd: collectChecked("cb-vrd"),
     difficultesRencontrees: g("f-difficultesRencontrees"),
@@ -486,7 +494,7 @@ function attachFicheHandlers(d) {
   });
   document.getElementById("btn-add-piece").onclick = () => {
     const nd = collectFicheForm(d);
-    nd.pieces.push({ id: uid(), niveau: "RDC", designation: "", quantite: "1", superficie: "" });
+    nd.pieces.push({ id: uid(), niveau: "RDC", designation: "", longueur: "", largeur: "", quantite: "1", superficie: "" });
     state.editing = nd; render();
   };
   document.querySelectorAll(".btn-del-piece").forEach((btn) => {
@@ -495,10 +503,16 @@ function attachFicheHandlers(d) {
   document.querySelectorAll(".piece-row").forEach((row) => {
     const p = d.pieces.find((x) => x.id === row.getAttribute("data-id"));
     if (!p) return;
+    const recalcSuperficie = () => {
+      const l = parseFloat(p.longueur) || 0, w = parseFloat(p.largeur) || 0;
+      p.superficie = l && w ? (l * w).toFixed(2) : "";
+      row.querySelector(".pc-superficie").value = p.superficie;
+    };
     row.querySelector(".pc-niveau").onchange = (e) => (p.niveau = e.target.value);
     row.querySelector(".pc-designation").oninput = (e) => (p.designation = e.target.value);
+    row.querySelector(".pc-longueur").oninput = (e) => { p.longueur = e.target.value; recalcSuperficie(); };
+    row.querySelector(".pc-largeur").oninput = (e) => { p.largeur = e.target.value; recalcSuperficie(); };
     row.querySelector(".pc-quantite").oninput = (e) => (p.quantite = e.target.value);
-    row.querySelector(".pc-superficie").oninput = (e) => (p.superficie = e.target.value);
   });
 
   document.getElementById("btn-take-photo").onclick = () => {

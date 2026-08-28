@@ -63,8 +63,9 @@ label.field-label { display: block; font-size: 13px; color: var(--muted); margin
 .photo-thumb { position: relative; }
 .photo-thumb img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
 .photo-del { position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; padding: 0; border-radius: 50%; background: #fff; }
-.piece-row { display: grid; grid-template-columns: 1fr 1.6fr 0.7fr 0.9fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
-.piece-header { display: grid; grid-template-columns: 1fr 1.6fr 0.7fr 0.9fr auto; gap: 6px; margin-bottom: 4px; font-size: 11px; color: #999; }
+.piece-row { display: grid; grid-template-columns: 1fr 1.4fr 0.7fr 0.7fr 0.6fr 0.8fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.piece-header { display: grid; grid-template-columns: 1fr 1.4fr 0.7fr 0.7fr 0.6fr 0.8fr auto; gap: 6px; margin-bottom: 4px; font-size: 11px; color: #999; }
+.piece-row input[readonly] { background: #f2f2f2; color: var(--muted); }
 table.info-table { width: 100%; font-size: 13px; border-collapse: collapse; }
 table.info-table td { padding: 5px 0; vertical-align: top; }
 table.info-table td:first-child { color: var(--muted); width: 42%; }
