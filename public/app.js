@@ -12,6 +12,19 @@ function fmtDuration(ms) {
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
   return h > 0 ? `${h} h ${m} min` : m > 0 ? `${m} min ${s} s` : `${s} s`;
 }
+function locateWithFallback(onSuccess, onError) {
+  navigator.geolocation.getCurrentPosition(
+    onSuccess,
+    (e) => {
+      if (e.code === e.TIMEOUT) {
+        navigator.geolocation.getCurrentPosition(onSuccess, onError, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+      } else {
+        onError(e);
+      }
+    },
+    { enableHighAccuracy: true, timeout: 8000 }
+  );
+}
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000, toRad = (x) => (x * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
@@ -442,23 +455,33 @@ function stopTracking() {
 function attachFicheHandlers(d) {
   document.getElementById("btn-cancel-fiche").onclick = () => { stopTracking(); state.editing = null; render(); };
 
-  document.getElementById("btn-capture-gps").onclick = () => {
+  document.getElementById("btn-capture-gps").onclick = (ev) => {
     const nd = collectFicheForm(d);
     const err = document.getElementById("gps-error");
+    const btn = ev.currentTarget;
     err.style.display = "none";
     if (!navigator.geolocation) { err.textContent = "Géolocalisation non disponible sur cet appareil/navigateur."; err.style.display = "block"; return; }
-    navigator.geolocation.getCurrentPosition(
+    btn.disabled = true;
+    const prevLabel = btn.textContent;
+    btn.textContent = "Localisation en cours…";
+    locateWithFallback(
       (pos) => { nd.lat = pos.coords.latitude; nd.lon = pos.coords.longitude; state.editing = nd; render(); },
-      (e) => { err.textContent = "Position indisponible (" + e.message + "). Vérifiez l'autorisation de localisation."; err.style.display = "block"; },
-      { enableHighAccuracy: true, timeout: 8000 }
+      (e) => { btn.disabled = false; btn.textContent = prevLabel; err.textContent = "Position indisponible (" + e.message + "). Vérifiez que la localisation est activée et autorisée pour ce site."; err.style.display = "block"; }
     );
   };
   document.querySelectorAll(".btn-cap-angle").forEach((btn) => {
-    btn.onclick = () => {
+    btn.onclick = (ev) => {
       const nd = collectFicheForm(d);
       const key = btn.getAttribute("data-key");
       if (!navigator.geolocation) return;
-      navigator.geolocation.getCurrentPosition((pos) => { nd.gpsAngles[key] = { lat: pos.coords.latitude, lon: pos.coords.longitude }; state.editing = nd; render(); }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+      const b = ev.currentTarget;
+      b.disabled = true;
+      const prevLabel = b.textContent;
+      b.textContent = "…";
+      locateWithFallback(
+        (pos) => { nd.gpsAngles[key] = { lat: pos.coords.latitude, lon: pos.coords.longitude }; state.editing = nd; render(); },
+        () => { b.disabled = false; b.textContent = prevLabel; }
+      );
     };
   });
   document.getElementById("btn-add-piece").onclick = () => {
