@@ -1,5 +1,5 @@
 const API = "/api";
-const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", editingUserId: null };
+const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null };
 
 function esc(s) {
   return (s == null ? "" : String(s)).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -117,6 +117,26 @@ function checkboxGroup(label, cls, options, selected = []) {
   </div></div>`;
 }
 const collectChecked = (cls) => Array.from(document.querySelectorAll("." + cls + ":checked")).map((el) => el.value);
+
+const ETAT_TERRAIN_LITTERATURE = {
+  "Bâtie": "le terrain comporte des constructions existantes",
+  "Vide": "le terrain ne comporte aucune construction et se présente vide",
+  "Terrain bâti": "il s'agit d'un terrain bâti",
+  "Incendié": "des traces d'incendie ont été constatées sur le site",
+  "Effondré": "des effondrements de structures sont visibles sur le site",
+  "Plat": "le relief du terrain est plat, sans dénivelé notable",
+  "Accidenté": "le terrain présente un relief accidenté",
+  "Rocheux": "le sol est de nature rocheuse",
+  "Inondé": "le terrain est actuellement inondé ou reconnu sujet aux inondations",
+};
+function litteratureEtatTerrain(list) {
+  if (!list || !list.length) return "";
+  const phrases = list.map((v) => ETAT_TERRAIN_LITTERATURE[v] || v.toLowerCase());
+  if (phrases.length === 1) return `Sur le plan de l'état du terrain, il est à noter que ${phrases[0]}.`;
+  const last = phrases[phrases.length - 1];
+  const firstOnes = phrases.slice(0, -1);
+  return `Sur le plan de l'état du terrain, il est à noter que ${firstOnes.join(", ")} et que ${last}.`;
+}
 
 function statusBadge(statut) {
   const map = {
@@ -370,6 +390,7 @@ function screenFicheForm(d) {
 
     ${checkboxGroup("Nature de la parcelle", "cb-nature", ["Habitation", "Champ", "Usine", "Ferme Agro"], d.natureParcelle)}
     ${checkboxGroup("État du terrain", "cb-etat", ["Bâtie", "Vide", "Terrain bâti", "Incendié", "Effondré", "Plat", "Accidenté", "Rocheux", "Inondé"], d.etatTerrain)}
+    <div id="etat-terrain-litterature" class="muted" style="margin:2px 0 14px;font-style:italic">${esc(litteratureEtatTerrain(d.etatTerrain))}</div>
     ${checkboxGroup("Voirie et réseaux divers (VRD)", "cb-vrd", ["Piste", "Goudron", "Pavé", "Collecteur", "Caniveau", "EDM", "SOMAGEP", "Forage"], d.vrd)}
     ${field("État du bâtiment", "f-etatBatiment", d.etatBatiment, { select: ["Neuf", "Bon état", "État moyen", "Mauvais état", "Vétuste", "En ruine"] })}
     ${field("Difficultés rencontrées sur le site", "f-difficultesRencontrees", d.difficultesRencontrees, { textarea: true, showOptional: true })}
@@ -435,6 +456,7 @@ function previewHTML(d, mode) {
       <tr><td>Coordonnées UTM</td><td>${d.utm ? `Zone ${d.utm.zone}${d.utm.hemisphere} — E ${d.utm.easting}, N ${d.utm.northing}` : "—"}</td></tr>
       <tr><td>Titre</td><td>${esc(d.typeTitre) || "—"} n°${esc(d.numeroTitre) || "—"}</td></tr>
       <tr><td>Nature / État / VRD</td><td>${esc([...d.natureParcelle, ...d.etatTerrain, ...d.vrd].join(", ")) || "—"}</td></tr>
+      <tr><td>Description de l'état du terrain</td><td>${esc(litteratureEtatTerrain(d.etatTerrain)) || "—"}</td></tr>
       <tr><td>Dimensions parcelle</td><td>${esc(d.longueurParcelle) || "—"} m × ${esc(d.largeurParcelle) || "—"} m</td></tr>
       <tr><td>Début / arrivée / fin</td><td>${fmtTime(d.heureDebutMission)} · ${fmtTime(d.heureArriveeSite)} · ${fmtTime(d.heureFinMission)}</td></tr>
       <tr><td>Distance tracée</td><td>${(d.distanceParcourue / 1000).toFixed(2)} km</td></tr>
@@ -459,33 +481,47 @@ function screenPreview(d) {
 
 function screenExpertHome() {
   const counts = { envoye: state.dossiers.filter((d) => d.statut === "envoye").length, en_traitement: state.dossiers.filter((d) => d.statut === "en_traitement").length, rapport_genere: state.dossiers.filter((d) => d.statut === "rapport_genere").length };
-  let visible = state.dossiers.filter((d) => d.statut !== "brouillon");
-  if (state.filterAgent) visible = visible.filter((d) => d.agentName === state.filterAgent);
-  const reqPending = state.requisitions.filter((r) => r.statut === "en_attente").length;
+  const reqPending = state.requisitions.filter((r) => r.statut === "en_attente");
   const agentNames = Array.from(new Set(state.users.filter((u) => u.role === "agent").map((u) => u.displayName)));
+  const metricCard = (label, value, statut) => `<button type="button" class="metric-card metric-card-link" data-statut="${statut}"><div class="label">${label}</div><div class="value">${value}</div></button>`;
+
+  let body;
+  if (state.filterStatut === "req_attente") {
+    body = reqPending.length === 0 ? '<div class="muted">Aucune réquisition en attente.</div>' : reqPending.map((r) => `
+      <div class="list-row"><div><div style="font-weight:600">${esc(r.siteIndicatif)}</div>
+      <div class="muted">${esc(r.mandantType)} ${r.mandantNom ? "— " + esc(r.mandantNom) : ""} ${r.clientNom ? "· Client : " + esc(r.clientNom) : ""}</div></div></div>`).join("");
+  } else {
+    let visible = state.dossiers.filter((d) => d.statut !== "brouillon");
+    if (state.filterAgent) visible = visible.filter((d) => d.agentName === state.filterAgent);
+    if (state.filterStatut) visible = visible.filter((d) => d.statut === state.filterStatut);
+    body = visible.length === 0 ? '<div class="muted">Aucun dossier reçu pour le moment.</div>' : visible.map((d) => `
+      <div class="list-row dossier-row" data-id="${d.id}"><div><div style="font-weight:600">N° ${esc(d.numeroRapport) || "—"} — ${esc(d.nomSite || d.commune) || "?"}</div>
+      <div class="muted">Agent : ${esc(d.agentName)} · Indicateur : ${esc(d.indicateurNom) || "—"} · ${d.photos.length} photo(s)</div></div>
+      <div style="display:flex;align-items:center;gap:6px">${statusBadge(d.statut)}
+      <button type="button" class="btn-edit-dossier" data-id="${d.id}">Éditer</button>
+      <button type="button" class="btn-delete-dossier" data-id="${d.id}">Supprimer</button></div></div>`).join("");
+  }
+
   return `<div>
     <div class="row-between" style="margin-bottom:20px">
       <div><div style="font-weight:600;font-size:17px">Espace expert</div><div class="muted">Réquisitions et dossiers reçus</div></div>
       <div style="display:flex;gap:8px"><button id="btn-manage-users">Gérer les agents</button><button id="btn-logout">Se déconnecter</button></div></div>
     <button class="accent" id="btn-new-requisition" style="margin-bottom:20px">+ Nouvelle réquisition à expert</button>
     <div class="metrics">
-      <div class="metric-card"><div class="label">Réq. en attente</div><div class="value">${reqPending}</div></div>
-      <div class="metric-card"><div class="label">Nouveaux</div><div class="value">${counts.envoye}</div></div>
-      <div class="metric-card"><div class="label">En traitement</div><div class="value">${counts.en_traitement}</div></div>
-      <div class="metric-card"><div class="label">Rapports générés</div><div class="value">${counts.rapport_genere}</div></div>
+      ${metricCard("Réq. en attente", reqPending.length, "req_attente")}
+      ${metricCard("Nouveaux", counts.envoye, "envoye")}
+      ${metricCard("En traitement", counts.en_traitement, "en_traitement")}
+      ${metricCard("Rapports générés", counts.rapport_genere, "rapport_genere")}
     </div>
     <div class="card" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
       <label class="field" style="flex:1;min-width:200px;margin-bottom:0"><span class="field-label">Aller directement à la session d'un agent</span>
         <select id="f-filter-agent"><option value="">— Tous les agents —</option>${agentNames.map((n) => `<option ${n === state.filterAgent ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
       </label>
       <button type="button" id="btn-go-agent">Voir ses dossiers</button>
-      ${state.filterAgent ? `<button type="button" id="btn-clear-agent-filter">Réinitialiser</button>` : ""}
+      ${state.filterAgent || state.filterStatut ? `<button type="button" id="btn-clear-agent-filter">Réinitialiser les filtres</button>` : ""}
     </div>
-    <div class="section-title" style="margin-top:0">Dossiers reçus des agents${state.filterAgent ? ` — ${esc(state.filterAgent)}` : ""}</div>
-    ${visible.length === 0 ? '<div class="muted">Aucun dossier reçu pour le moment.</div>' : visible.map((d) => `
-      <div class="list-row dossier-row" data-id="${d.id}"><div><div style="font-weight:600">N° ${esc(d.numeroRapport) || "—"} — ${esc(d.nomSite || d.commune) || "?"}</div>
-      <div class="muted">Agent : ${esc(d.agentName)} · Indicateur : ${esc(d.indicateurNom) || "—"} · ${d.photos.length} photo(s)</div></div>
-      ${statusBadge(d.statut)}</div>`).join("")}
+    <div class="section-title" style="margin-top:0">${state.filterStatut === "req_attente" ? "Réquisitions en attente" : "Dossiers reçus des agents"}${state.filterAgent ? ` — ${esc(state.filterAgent)}` : ""}</div>
+    ${body}
   </div>`;
 }
 
@@ -555,6 +591,11 @@ function coefficientEtatBatiment(etat) {
 }
 function screenExpertDetail(d) {
   return `<div>
+    <div class="btn-row" style="margin-bottom:1rem">
+      <button type="button" id="btn-nav-prev-expert">← Précédent</button>
+      <button type="button" id="btn-nav-next-expert">Suivant →</button>
+      <button type="button" id="btn-nav-quit-expert" style="margin-left:auto">Quitter (enregistrer)</button>
+    </div>
     <button id="btn-back-expert" style="margin-bottom:1rem">← Retour à la liste</button>
     <div class="row-between" style="margin-bottom:10px"><div style="font-weight:600;font-size:17px">N° ${esc(d.numeroRapport) || "—"} — ${esc(d.nomSite)}</div>${statusBadge(d.statut)}</div>
     <div class="muted" style="margin-bottom:16px">Toutes les informations restent modifiables par l'expert après réception.</div>
@@ -566,11 +607,12 @@ function screenExpertDetail(d) {
     <div id="prix-reference-result" style="margin-bottom:16px"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       ${field("Prix de base (FCFA/m²)", "e-prixBase", d.prixBase, { showOptional: true })}
-      ${field("Prix au choix de l'expert (FCFA/m²)", "e-prixChoisi", d.prixChoisi, { showOptional: true })}
+      ${field("Prix au choix de l'expert (FCFA/m²)", "e-prixChoisi", d.prixChoisi, { required: true })}
     </div>
     ${expertPiecesBlock(d)}
     ${field("Méthode d'évaluation", "e-methodeEvaluation", d.methodeEvaluation, { showOptional: true })}
-    ${field("Conclusion", "e-conclusion", d.conclusion, { textarea: true, showOptional: true })}
+    ${field("Conclusion", "e-conclusion", d.conclusion, { textarea: true, required: true })}
+    <div id="expert-error" class="error-text" style="display:none"></div>
     <div class="btn-row">
       <button id="btn-save-expert">Enregistrer les modifications</button>
       <button class="accent" id="btn-generate-report">Générer le rapport</button>
@@ -600,6 +642,11 @@ function stopTracking() {
 
 // ---------------- Event wiring ----------------
 function attachFicheHandlers(d) {
+  document.querySelectorAll(".cb-etat").forEach((cb) => {
+    cb.onchange = () => {
+      document.getElementById("etat-terrain-litterature").textContent = litteratureEtatTerrain(collectChecked("cb-etat"));
+    };
+  });
   document.getElementById("btn-nav-refresh").onclick = async () => {
     if (d.id) { state.editing = await api(`/dossiers/${d.id}`); }
     render();
@@ -945,6 +992,39 @@ async function render() {
       const d = state.dossiers.find((x) => x.id === state.activeDossierId);
       app.innerHTML = screenExpertDetail(d);
       document.getElementById("btn-back-expert").onclick = () => { state.activeDossierId = null; render(); };
+      const expertVisibleList = () => {
+        let list = state.dossiers.filter((x) => x.statut !== "brouillon");
+        if (state.filterAgent) list = list.filter((x) => x.agentName === state.filterAgent);
+        if (state.filterStatut && state.filterStatut !== "req_attente") list = list.filter((x) => x.statut === state.filterStatut);
+        return list;
+      };
+      document.getElementById("btn-nav-quit-expert").onclick = async () => {
+        const updated = collectExpertForm(d);
+        if (updated.statut === "envoye") updated.statut = "en_traitement";
+        await saveDossier(updated);
+        state.activeDossierId = null;
+        await loadAll(); render();
+      };
+      document.getElementById("btn-nav-prev-expert").onclick = async () => {
+        let updated = collectExpertForm(d);
+        if (updated.statut === "envoye") updated.statut = "en_traitement";
+        const saved = await saveDossier(updated);
+        await loadAll();
+        const list = expertVisibleList();
+        const idx = list.findIndex((x) => x.id === saved.id);
+        state.activeDossierId = idx > 0 ? list[idx - 1].id : saved.id;
+        render();
+      };
+      document.getElementById("btn-nav-next-expert").onclick = async () => {
+        let updated = collectExpertForm(d);
+        if (updated.statut === "envoye") updated.statut = "en_traitement";
+        const saved = await saveDossier(updated);
+        await loadAll();
+        const list = expertVisibleList();
+        const idx = list.findIndex((x) => x.id === saved.id);
+        state.activeDossierId = idx >= 0 && idx < list.length - 1 ? list[idx + 1].id : saved.id;
+        render();
+      };
       document.getElementById("btn-prix-reference").onclick = async () => {
         const box = document.getElementById("prix-reference-result");
         box.innerHTML = '<div class="muted">Recherche…</div>';
@@ -991,6 +1071,14 @@ async function render() {
       };
       document.getElementById("btn-generate-report").onclick = async () => {
         let updated = collectExpertForm(d);
+        const err = document.getElementById("expert-error");
+        if (!updated.prixChoisi || !updated.conclusion) {
+          err.textContent = "Impossible de générer le rapport : renseignez le prix choisi et la conclusion avant de continuer.";
+          err.style.display = "block";
+          document.getElementById("e-conclusion").scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        err.style.display = "none";
         updated.statut = "rapport_genere";
         const saved = await saveDossier(updated);
         document.getElementById("report-preview").innerHTML = previewHTML(saved, "expert") +
@@ -1013,9 +1101,27 @@ async function render() {
     document.getElementById("btn-new-requisition").onclick = () => { state.newRequisition = emptyRequisition(); render(); };
     document.getElementById("btn-go-agent").onclick = () => { state.filterAgent = document.getElementById("f-filter-agent").value; render(); };
     const clearBtn = document.getElementById("btn-clear-agent-filter");
-    if (clearBtn) clearBtn.onclick = () => { state.filterAgent = ""; render(); };
+    if (clearBtn) clearBtn.onclick = () => { state.filterAgent = ""; state.filterStatut = ""; render(); };
+    document.querySelectorAll(".metric-card-link").forEach((btn) => {
+      btn.onclick = () => {
+        const statut = btn.getAttribute("data-statut");
+        state.filterStatut = state.filterStatut === statut ? "" : statut;
+        render();
+      };
+    });
     document.querySelectorAll(".dossier-row").forEach((row) => {
       row.onclick = () => { state.activeDossierId = row.getAttribute("data-id"); render(); };
+      const editBtn = row.querySelector(".btn-edit-dossier");
+      if (editBtn) editBtn.onclick = (e) => { e.stopPropagation(); state.activeDossierId = row.getAttribute("data-id"); render(); };
+      const delBtn = row.querySelector(".btn-delete-dossier");
+      if (delBtn) delBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const id = row.getAttribute("data-id");
+        const dd = state.dossiers.find((x) => x.id === id);
+        if (!confirm(`Supprimer définitivement le dossier ${dd && dd.numeroRapport ? dd.numeroRapport : ""} de l'agent ${dd ? dd.agentName : ""} ? Cette action est irréversible.`)) return;
+        await api(`/dossiers/${id}`, { method: "DELETE" });
+        await loadAll(); render();
+      };
     });
     return;
   }

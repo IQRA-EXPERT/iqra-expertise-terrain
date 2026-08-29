@@ -201,6 +201,26 @@ function coefficientEtatBatiment(etat) {
   return COEFFICIENTS_ETAT_BATIMENT[etat] != null ? COEFFICIENTS_ETAT_BATIMENT[etat] : 1.0;
 }
 
+const ETAT_TERRAIN_LITTERATURE = {
+  "Bâtie": "le terrain comporte des constructions existantes",
+  "Vide": "le terrain ne comporte aucune construction et se présente vide",
+  "Terrain bâti": "il s'agit d'un terrain bâti",
+  "Incendié": "des traces d'incendie ont été constatées sur le site",
+  "Effondré": "des effondrements de structures sont visibles sur le site",
+  "Plat": "le relief du terrain est plat, sans dénivelé notable",
+  "Accidenté": "le terrain présente un relief accidenté",
+  "Rocheux": "le sol est de nature rocheuse",
+  "Inondé": "le terrain est actuellement inondé ou reconnu sujet aux inondations",
+};
+function litteratureEtatTerrain(list) {
+  if (!list || !list.length) return "";
+  const phrases = list.map((v) => ETAT_TERRAIN_LITTERATURE[v] || v.toLowerCase());
+  if (phrases.length === 1) return `Sur le plan de l'état du terrain, il est à noter que ${phrases[0]}.`;
+  const last = phrases[phrases.length - 1];
+  const firstOnes = phrases.slice(0, -1);
+  return `Sur le plan de l'état du terrain, il est à noter que ${firstOnes.join(", ")} et que ${last}.`;
+}
+
 function computeParcelGeometry(d) {
   const a = d.gpsAngles || {};
   const pts = ["P1", "P2", "P3", "P4"].map((k) => a[k]).filter(Boolean);
@@ -556,6 +576,7 @@ app.get("/api/dossiers/:id/report.pdf", (req, res) => {
   row2("Coordonnées UTM", d.utm ? `Zone ${d.utm.zone}${d.utm.hemisphere} — E ${d.utm.easting}, N ${d.utm.northing}` : "");
   row2("Titre", `${d.typeTitre || "—"} n°${d.numeroTitre || "—"}`);
   row2("Nature / État / VRD", [...(d.natureParcelle || []), ...(d.etatTerrain || []), ...(d.vrd || [])].join(", "));
+  row2("Description de l'état du terrain", litteratureEtatTerrain(d.etatTerrain));
   row2("Dimensions parcelle", `${d.longueurParcelle || "—"} m × ${d.largeurParcelle || "—"} m`);
   row2("Hauteur murs / acrotère", `${d.hauteurMur || "—"} m / ${d.hauteurAcrotere || "—"} m`);
   row2("État du bâtiment", d.etatBatiment || "—");
