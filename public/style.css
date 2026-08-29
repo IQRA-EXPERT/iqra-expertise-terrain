@@ -81,5 +81,6 @@ table.info-table td:first-child { color: var(--muted); width: 42%; }
 .metric-card .value { font-size: 22px; font-weight: 600; }
 .metric-card-link { border: none; text-align: left; cursor: pointer; width: 100%; font-family: inherit; }
 .metric-card-link:hover { background: var(--border); }
+#btn-quit-anywhere { position: fixed; bottom: 16px; right: 16px; z-index: 500; box-shadow: 0 2px 8px rgba(0,0,0,0.25); background: var(--surface-2); }
 a.link { color: var(--navy); font-size: 13px; }
 .gps-point-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding: 6px 0; font-size: 12px; }

@@ -9,6 +9,7 @@ const Database = require("better-sqlite3");
 const nodemailer = require("nodemailer");
 const ExcelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
+const { Document: DocxDocument, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = require("docx");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,8 @@ CREATE TABLE IF NOT EXISTS requisitions (
   mandantType TEXT, mandantNom TEXT, mandantTelephone TEXT,
   siteIndicatif TEXT, instructionsExpert TEXT,
   fichierRequisitionPath TEXT,
+  assignedAgent TEXT,
+  vuParAgentAt TEXT,
   statut TEXT DEFAULT 'en_attente'
 );
 
@@ -94,6 +97,8 @@ ensureColumn("dossiers", "etatBatiment", "TEXT");
 ensureColumn("users", "telephone", "TEXT");
 ensureColumn("users", "qualification", "TEXT");
 ensureColumn("requisitions", "fichierRequisitionPath", "TEXT");
+ensureColumn("requisitions", "assignedAgent", "TEXT");
+ensureColumn("requisitions", "vuParAgentAt", "TEXT");
 
 // ---------- Uploads (photos) ----------
 const storage = multer.diskStorage({
@@ -113,7 +118,7 @@ if (process.env.SMTP_USER && process.env.SMTP_PASS) {
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
 }
-async function notifyExpert(subject, text) {
+async function notifyExpert(subject, text, attachments) {
   if (!transporter) {
     console.log("[email non configuré] Aurait envoyé:", subject);
     return;
@@ -124,6 +129,7 @@ async function notifyExpert(subject, text) {
       to: process.env.EXPERT_EMAIL || "iqraexpertise@gmail.com",
       subject,
       text,
+      attachments,
     });
   } catch (e) {
     console.error("Erreur envoi email:", e.message);
@@ -444,11 +450,13 @@ app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition")
     siteIndicatif: b.siteIndicatif,
     instructionsExpert: b.instructionsExpert || "",
     fichierRequisitionPath: req.file ? req.file.filename : null,
+    assignedAgent: b.assignedAgent || "",
+    vuParAgentAt: null,
     statut: "en_attente",
   };
   db.prepare(
-    `INSERT INTO requisitions (id,dateCreation,referenceDossier,clientNom,clientTelephone,clientEmail,mandantType,mandantNom,mandantTelephone,siteIndicatif,instructionsExpert,fichierRequisitionPath,statut)
-     VALUES (@id,@dateCreation,@referenceDossier,@clientNom,@clientTelephone,@clientEmail,@mandantType,@mandantNom,@mandantTelephone,@siteIndicatif,@instructionsExpert,@fichierRequisitionPath,@statut)`
+    `INSERT INTO requisitions (id,dateCreation,referenceDossier,clientNom,clientTelephone,clientEmail,mandantType,mandantNom,mandantTelephone,siteIndicatif,instructionsExpert,fichierRequisitionPath,assignedAgent,vuParAgentAt,statut)
+     VALUES (@id,@dateCreation,@referenceDossier,@clientNom,@clientTelephone,@clientEmail,@mandantType,@mandantNom,@mandantTelephone,@siteIndicatif,@instructionsExpert,@fichierRequisitionPath,@assignedAgent,@vuParAgentAt,@statut)`
   ).run(r);
   res.json(r);
 }));
@@ -456,9 +464,44 @@ app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition")
 app.patch("/api/requisitions/:id", requireExpert, (req, res) => {
   const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Introuvable" });
-  const statut = req.body.statut || existing.statut;
-  db.prepare("UPDATE requisitions SET statut = ? WHERE id = ?").run(statut, req.params.id);
-  res.json({ ...existing, statut });
+  const b = req.body || {};
+  const updated = {
+    id: req.params.id,
+    statut: b.statut != null ? b.statut : existing.statut,
+    referenceDossier: b.referenceDossier != null ? b.referenceDossier : existing.referenceDossier,
+    clientNom: b.clientNom != null ? b.clientNom : existing.clientNom,
+    clientTelephone: b.clientTelephone != null ? b.clientTelephone : existing.clientTelephone,
+    clientEmail: b.clientEmail != null ? b.clientEmail : existing.clientEmail,
+    mandantType: b.mandantType != null ? b.mandantType : existing.mandantType,
+    mandantNom: b.mandantNom != null ? b.mandantNom : existing.mandantNom,
+    mandantTelephone: b.mandantTelephone != null ? b.mandantTelephone : existing.mandantTelephone,
+    siteIndicatif: b.siteIndicatif != null ? b.siteIndicatif : existing.siteIndicatif,
+    instructionsExpert: b.instructionsExpert != null ? b.instructionsExpert : existing.instructionsExpert,
+    assignedAgent: b.assignedAgent != null ? b.assignedAgent : existing.assignedAgent,
+  };
+  db.prepare(
+    `UPDATE requisitions SET statut=@statut, referenceDossier=@referenceDossier, clientNom=@clientNom, clientTelephone=@clientTelephone, clientEmail=@clientEmail, mandantType=@mandantType, mandantNom=@mandantNom, mandantTelephone=@mandantTelephone, siteIndicatif=@siteIndicatif, instructionsExpert=@instructionsExpert, assignedAgent=@assignedAgent WHERE id=@id`
+  ).run(updated);
+  res.json(db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id));
+});
+
+app.delete("/api/requisitions/:id", requireExpert, (req, res) => {
+  const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (existing.fichierRequisitionPath) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, existing.fichierRequisitionPath)); } catch (e) {}
+  }
+  db.prepare("DELETE FROM requisitions WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/requisitions/:id/vu", (req, res) => {
+  const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (!existing.vuParAgentAt) {
+    db.prepare("UPDATE requisitions SET vuParAgentAt = ? WHERE id = ?").run(nowISO(), req.params.id);
+  }
+  res.json(db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id));
 });
 
 // =========================================================
@@ -478,7 +521,11 @@ app.get("/api/dossiers/:id", (req, res) => {
 app.delete("/api/dossiers/:id", (req, res) => {
   const dossier = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
   if (!dossier) return res.status(404).json({ error: "Introuvable" });
-  if (req.session.role !== "expert") {
+  if (req.session.role === "expert") {
+    if (dossier.statut === "brouillon") {
+      return res.status(403).json({ error: "Mission de terrain en cours : l'expert ne peut pas supprimer ce dossier tant que l'agent n'a pas envoyé son rapport." });
+    }
+  } else {
     const user = db.prepare("SELECT displayName FROM users WHERE id = ?").get(req.session.userId);
     if (!user || dossier.agentName !== user.displayName) {
       return res.status(403).json({ error: "Vous ne pouvez supprimer que vos propres fiches." });
@@ -491,7 +538,7 @@ app.delete("/api/dossiers/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/dossiers/:id/export.xlsx", async (req, res) => {
+app.get("/api/dossiers/:id/export.xlsx", ah(async (req, res) => {
   const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Introuvable" });
   const d = rowToDossier(row);
@@ -542,21 +589,18 @@ app.get("/api/dossiers/:id/export.xlsx", async (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="dossier-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.xlsx"`);
   await workbook.xlsx.write(res);
   res.end();
-});
+}));
 
-app.get("/api/dossiers/:id/report.pdf", (req, res) => {
-  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
-  if (!row) return res.status(404).json({ error: "Introuvable" });
-  const d = rowToDossier(row);
+function generateReportPdfBuffer(d) {
   const isExpertReport = d.statut === "rapport_genere" || d.statut === "en_traitement";
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="rapport-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf"`);
-
+  return new Promise((resolve, reject) => {
   const doc = new PDFDocument({ bufferPages: true, size: "A4", margins: { top: 80, bottom: 60, left: 50, right: 50 } });
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+  doc.on("end", () => resolve(Buffer.concat(chunks)));
+  doc.on("error", reject);
   doc.on("pageAdded", () => drawWatermark(doc));
   drawWatermark(doc);
-  doc.pipe(res);
 
   const row2 = (k, v) => {
     const y = doc.y;
@@ -632,7 +676,98 @@ app.get("/api/dossiers/:id/report.pdf", (req, res) => {
     drawHeaderFooterChrome(doc, i + 1, range.count);
   }
   doc.end();
-});
+  });
+}
+
+async function generateReportDocxBuffer(d) {
+  const isExpertReport = d.statut === "rapport_genere" || d.statut === "en_traitement";
+  const rows = [
+    ["Mandant / Client", `${d.mandantType || ""} ${d.mandantNom || ""}${d.clientNom ? " · " + d.clientNom : ""}`],
+    ["Équipe", (d.equipe || []).map((e) => e.nom).filter(Boolean).join(", ")],
+    ["Indicateur de terrain", d.indicateurNom ? `${d.indicateurNom} ${d.indicateurPrenom} — ${d.indicateurTelephone} (${d.indicateurType})` : ""],
+    ["Localisation", `${d.quartier || ""}, ${d.commune || "—"} (${d.cercle || "—"}, ${d.region || "—"})`],
+    ["Coordonnées UTM", d.utm ? `Zone ${d.utm.zone}${d.utm.hemisphere} — E ${d.utm.easting}, N ${d.utm.northing}` : ""],
+    ["Titre", `${d.typeTitre || "—"} n°${d.numeroTitre || "—"}`],
+    ["Nature / État / VRD", [...(d.natureParcelle || []), ...(d.etatTerrain || []), ...(d.vrd || [])].join(", ")],
+    ["Description de l'état du terrain", litteratureEtatTerrain(d.etatTerrain)],
+    ["Dimensions parcelle", `${d.longueurParcelle || "—"} m × ${d.largeurParcelle || "—"} m`],
+    ["Hauteur murs / acrotère", `${d.hauteurMur || "—"} m / ${d.hauteurAcrotere || "—"} m`],
+    ["État du bâtiment", d.etatBatiment || "—"],
+  ];
+  if (isExpertReport) {
+    rows.push(
+      ["Prix de base", d.prixBase ? `${d.prixBase} FCFA/m²` : ""],
+      ["Prix choisi par l'expert", d.prixChoisi ? `${d.prixChoisi} FCFA/m²` : ""],
+      ["Méthode d'évaluation", d.methodeEvaluation || ""],
+      ["Conclusion", d.conclusion || ""]
+    );
+  }
+  const cell = (text, opts = {}) => new TableCell({
+    ...(opts.width ? { width: { size: opts.width, type: WidthType.DXA } } : {}),
+    children: [new Paragraph({ children: [new TextRun({ text: text || "—", bold: !!opts.bold, color: opts.color })] })],
+  });
+  const infoTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: rows.map(([k, v]) => new TableRow({ children: [cell(k, { bold: true, width: 3000 }), cell(v)] })),
+  });
+  const children = [
+    new Paragraph({ children: [new TextRun({ text: "IQRA EXPERT", bold: true, size: 32, color: "1b5e20" })] }),
+    new Paragraph({ children: [new TextRun({ text: isExpertReport ? "Rapport d'expertise" : "Fiche de visite terrain", bold: true, size: 28 })] }),
+    new Paragraph({ children: [new TextRun({ text: `N° ${d.numeroRapport || "—"} — ${d.nomSite || d.commune || "—"}`, color: "666666" })] }),
+    new Paragraph({ text: "" }),
+    infoTable,
+    new Paragraph({ text: "" }),
+  ];
+  if (d.pieces && d.pieces.length) {
+    children.push(new Paragraph({ children: [new TextRun({ text: "Relevé des pièces", bold: true })] }));
+    children.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({ children: ["Désignation", "Niveau", "Qté", "Superficie"].map((h) => cell(h, { bold: true })) }),
+          ...d.pieces.map((p) => new TableRow({ children: [cell(p.designation), cell(p.niveau), cell(String(p.quantite || "")), cell(p.superficie ? `${p.superficie} m²` : "")] })),
+        ],
+      })
+    );
+    children.push(new Paragraph({ text: "" }));
+  }
+  if (d.photos && d.photos.length) {
+    children.push(new Paragraph({ children: [new TextRun({ text: "Photos", bold: true })] }));
+    for (const p of d.photos) {
+      const filePath = path.join(UPLOAD_DIR, path.basename(p.url));
+      if (fs.existsSync(filePath)) {
+        try {
+          const data = fs.readFileSync(filePath);
+          children.push(new Paragraph({ children: [new ImageRun({ data, transformation: { width: 280, height: 210 } })], alignment: AlignmentType.LEFT }));
+        } catch (e) {}
+      }
+    }
+  }
+  const docx = new DocxDocument({ sections: [{ children }] });
+  return Packer.toBuffer(docx);
+}
+
+app.get("/api/dossiers/:id/report.docx", ah(async (req, res) => {
+  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Introuvable" });
+  const d = rowToDossier(row);
+  const buffer = await generateReportDocxBuffer(d);
+  const filename = `rapport-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.docx`;
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.end(buffer);
+}));
+
+app.get("/api/dossiers/:id/report.pdf", ah(async (req, res) => {
+  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Introuvable" });
+  const d = rowToDossier(row);
+  const buffer = await generateReportPdfBuffer(d);
+  const filename = `rapport-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `${req.query.dl ? "attachment" : "inline"}; filename="${filename}"`);
+  res.end(buffer);
+}));
 
 // =========================================================
 // API: Base de prix de référence (expertises terminées)
@@ -741,6 +876,12 @@ function nextNumeroRapport() {
 
 app.post("/api/dossiers", ah(async (req, res) => {
   const b = req.body;
+  if (req.session.role === "expert" && b.id) {
+    const existing = db.prepare("SELECT statut FROM dossiers WHERE id = ?").get(b.id);
+    if (existing && existing.statut === "brouillon") {
+      return res.status(403).json({ error: "Mission de terrain en cours : l'expert ne peut pas modifier ce dossier tant que l'agent n'a pas envoyé son rapport." });
+    }
+  }
   if (b.statut === "envoye" && !b.numeroRapport) {
     b.numeroRapport = nextNumeroRapport();
   }
@@ -753,6 +894,19 @@ app.post("/api/dossiers", ah(async (req, res) => {
       `Nouveau dossier reçu — ${b.numeroRapport || "sans n°"} (${b.nomSite || b.commune || ""})`,
       `Un agent (${b.agentName}) vient d'envoyer un dossier de visite terrain.\n\nSite : ${b.nomSite || b.commune}\nIndicateur de terrain : ${b.indicateurNom} ${b.indicateurPrenom} (${b.indicateurTelephone})\n\nConsultez l'application pour le traiter.`
     );
+  }
+  if (b.statut === "rapport_genere") {
+    const savedDossier = rowToDossier(db.prepare("SELECT * FROM dossiers WHERE id = ?").get(id));
+    try {
+      const pdfBuffer = await generateReportPdfBuffer(savedDossier);
+      await notifyExpert(
+        `Rapport généré — ${savedDossier.numeroRapport || "sans n°"} (${savedDossier.nomSite || savedDossier.commune || ""})`,
+        `Le rapport d'expertise ${savedDossier.numeroRapport || ""} a été généré et est joint à ce message en PDF.`,
+        [{ filename: `rapport-${(savedDossier.numeroRapport || savedDossier.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`, content: pdfBuffer }]
+      );
+    } catch (e) {
+      console.error("Erreur envoi PDF du rapport:", e.message);
+    }
   }
   const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(id);
   res.json(rowToDossier(row));

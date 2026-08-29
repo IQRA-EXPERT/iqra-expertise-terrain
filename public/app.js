@@ -178,13 +178,14 @@ function screenRequisitionForm(r) {
     <div class="section-title">Mission</div>
     ${field("Site à visiter (commune / quartier)", "r-siteIndicatif", r.siteIndicatif, { required: true })}
     ${field("Instructions pour l'agent", "r-instructionsExpert", r.instructionsExpert, { textarea: true, showOptional: true })}
+    ${field("Agent assigné", "r-assignedAgent", r.assignedAgent, { select: ["", ...Array.from(new Set(state.users.filter((u) => u.role === "agent").map((u) => u.displayName)))], showOptional: true })}
     <label class="field"><span class="field-label">Document de réquisition original (scanné, facultatif)</span>
       <input type="file" id="r-fichierRequisition" accept="image/*,.pdf" /></label>
     ${r.fichierRequisitionPath ? `<div class="muted" style="margin-bottom:12px"><a class="link" href="/uploads/${esc(r.fichierRequisitionPath)}" target="_blank">📎 Voir le document déjà joint ↗</a></div>` : ""}
     <div id="req-error" class="error-text" style="display:none"></div>
     <div class="btn-row">
       <button type="button" id="btn-download-req-pdf">⬇ Télécharger la fiche (PDF)</button>
-      <button class="accent" id="btn-send-requisition">Émettre la réquisition</button>
+      <button class="accent" id="btn-send-requisition">${r.id ? "Enregistrer les modifications" : "Émettre la réquisition"}</button>
     </div>
   </div>`;
 }
@@ -212,16 +213,27 @@ function printRequisition(r) {
 }
 function collectRequisitionForm(base) {
   const g = (id) => document.getElementById(id).value;
-  return { ...base, referenceDossier: g("r-referenceDossier"), clientNom: g("r-clientNom"), clientTelephone: g("r-clientTelephone"), clientEmail: g("r-clientEmail"), mandantType: g("r-mandantType"), mandantNom: g("r-mandantNom"), mandantTelephone: g("r-mandantTelephone"), siteIndicatif: g("r-siteIndicatif"), instructionsExpert: g("r-instructionsExpert") };
+  return { ...base, referenceDossier: g("r-referenceDossier"), clientNom: g("r-clientNom"), clientTelephone: g("r-clientTelephone"), clientEmail: g("r-clientEmail"), mandantType: g("r-mandantType"), mandantNom: g("r-mandantNom"), mandantTelephone: g("r-mandantTelephone"), siteIndicatif: g("r-siteIndicatif"), instructionsExpert: g("r-instructionsExpert"), assignedAgent: g("r-assignedAgent") };
 }
 
 function screenAgentHome() {
-  const pending = state.requisitions.filter((r) => r.statut === "en_attente");
+  const pending = state.requisitions.filter((r) => r.statut === "en_attente" && (!r.assignedAgent || r.assignedAgent === state.agentName));
   const mine = state.dossiers.filter((d) => d.agentName === state.agentName);
+  const counts = {
+    envoye: mine.filter((d) => d.statut === "envoye").length,
+    en_traitement: mine.filter((d) => d.statut === "en_traitement").length,
+    rapport_genere: mine.filter((d) => d.statut === "rapport_genere").length,
+  };
   return `<div>
     <div class="row-between" style="margin-bottom:20px">
       <div><div style="font-weight:600;font-size:17px">Agent : ${esc(state.agentName)}</div><div class="muted">Mode saisie terrain</div></div>
       <button id="btn-logout">Se déconnecter</button></div>
+    <div class="metrics">
+      <div class="metric-card"><div class="label">Réq. en attente</div><div class="value">${pending.length}</div></div>
+      <div class="metric-card"><div class="label">Nouveaux (envoyés)</div><div class="value">${counts.envoye}</div></div>
+      <div class="metric-card"><div class="label">En traitement</div><div class="value">${counts.en_traitement}</div></div>
+      <div class="metric-card"><div class="label">Rapports générés</div><div class="value">${counts.rapport_genere}</div></div>
+    </div>
     <div class="section-title" style="margin-top:0">Réquisitions en attente (${pending.length})</div>
     ${pending.length === 0 ? '<div class="muted">Aucune réquisition en attente. L\'expert doit émettre un ordre de mission avant toute visite.</div>' : pending.map((r) => `
       <div class="list-row req-row" data-id="${r.id}"><div><div style="font-weight:600">${esc(r.siteIndicatif)}</div>
@@ -475,7 +487,9 @@ function screenPreview(d) {
       <button id="btn-back-to-edit">✎ Corriger des informations</button>
       <button id="btn-print-pdf">⬇ Enregistrer en PDF (aperçu rapide)</button>
       <button id="btn-download-report-pdf">⬇ Rapport PDF officiel (numéroté)</button>
+      <button id="btn-download-report-docx">⬇ Rapport Word (.docx)</button>
       <button class="accent" id="btn-confirm-send">Confirmer l'envoi à l'expert</button>
+      <span id="send-confirm-check" class="badge badge-ok" style="display:none">✓ Envoyé</span>
     </div></div>`;
 }
 
@@ -485,11 +499,16 @@ function screenExpertHome() {
   const agentNames = Array.from(new Set(state.users.filter((u) => u.role === "agent").map((u) => u.displayName)));
   const metricCard = (label, value, statut) => `<button type="button" class="metric-card metric-card-link" data-statut="${statut}"><div class="label">${label}</div><div class="value">${value}</div></button>`;
 
+  const enCours = state.dossiers.filter((d) => d.statut === "brouillon" && d.heureDebutMission);
+
   let body;
   if (state.filterStatut === "req_attente") {
     body = reqPending.length === 0 ? '<div class="muted">Aucune réquisition en attente.</div>' : reqPending.map((r) => `
-      <div class="list-row"><div><div style="font-weight:600">${esc(r.siteIndicatif)}</div>
-      <div class="muted">${esc(r.mandantType)} ${r.mandantNom ? "— " + esc(r.mandantNom) : ""} ${r.clientNom ? "· Client : " + esc(r.clientNom) : ""}</div></div></div>`).join("");
+      <div class="list-row req-pending-row" data-id="${r.id}"><div><div style="font-weight:600">${esc(r.siteIndicatif)}</div>
+      <div class="muted">${esc(r.mandantType)} ${r.mandantNom ? "— " + esc(r.mandantNom) : ""} ${r.clientNom ? "· Client : " + esc(r.clientNom) : ""}${r.assignedAgent ? " · Assignée à " + esc(r.assignedAgent) : ""}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">${r.vuParAgentAt ? `<span class="badge badge-ok" title="Vue le ${new Date(r.vuParAgentAt).toLocaleString("fr-FR")}">✓ Vue par l'agent</span>` : `<span class="badge badge-muted">Pas encore vue</span>`}
+      <button type="button" class="btn-edit-req" data-id="${r.id}">Éditer</button>
+      <button type="button" class="btn-delete-req" data-id="${r.id}">Supprimer</button></div></div>`).join("");
   } else {
     let visible = state.dossiers.filter((d) => d.statut !== "brouillon");
     if (state.filterAgent) visible = visible.filter((d) => d.agentName === state.filterAgent);
@@ -520,6 +539,12 @@ function screenExpertHome() {
       <button type="button" id="btn-go-agent">Voir ses dossiers</button>
       ${state.filterAgent || state.filterStatut ? `<button type="button" id="btn-clear-agent-filter">Réinitialiser les filtres</button>` : ""}
     </div>
+    ${enCours.length ? `<div class="card accent-border" style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:6px">Missions de terrain en cours (${enCours.length})</div>
+      <div class="muted" style="margin-bottom:8px">Visite en cours par l'agent — non modifiable ni supprimable tant qu'elle n'est pas envoyée.</div>
+      ${enCours.map((d) => `<div class="list-row"><div><div style="font-weight:600">${esc(d.nomSite || d.commune) || "Site non renseigné"}</div>
+      <div class="muted">Agent : ${esc(d.agentName)} · Débutée à ${fmtTime(d.heureDebutMission)}</div></div></div>`).join("")}
+    </div>` : ""}
     <div class="section-title" style="margin-top:0">${state.filterStatut === "req_attente" ? "Réquisitions en attente" : "Dossiers reçus des agents"}${state.filterAgent ? ` — ${esc(state.filterAgent)}` : ""}</div>
     ${body}
   </div>`;
@@ -817,8 +842,34 @@ async function doLogout() {
   render();
 }
 
+function updateQuitButton() {
+  const btn = document.getElementById("btn-quit-anywhere");
+  if (!btn) return;
+  if (!state.role) { btn.style.display = "none"; return; }
+  btn.style.display = "block";
+  btn.onclick = async () => {
+    if (state.editing && !state.previewMode && document.getElementById("f-numeroRapport")) {
+      const nd = collectFicheForm(state.editing);
+      await saveDossier(nd);
+      stopTracking();
+    } else if (state.activeDossierId && document.getElementById("e-conclusion")) {
+      const d = state.dossiers.find((x) => x.id === state.activeDossierId);
+      if (d) {
+        const updated = collectExpertForm(d);
+        if (updated.statut === "envoye") updated.statut = "en_traitement";
+        await saveDossier(updated);
+      }
+    }
+    state.editing = null; state.previewMode = false; state.activeDossierId = null;
+    state.newRequisition = null; state.managingUsers = false; state.editingUserId = null;
+    await loadAll();
+    render();
+  };
+}
+
 async function render() {
   const app = document.getElementById("app");
+  updateQuitButton();
 
   if (!state.role) {
     app.innerHTML = screenLogin();
@@ -853,18 +904,29 @@ async function render() {
         state.editing = saved;
         window.open(`${API}/dossiers/${saved.id}/report.pdf`, "_blank");
       };
-      document.getElementById("btn-confirm-send").onclick = async () => {
+      document.getElementById("btn-download-report-docx").onclick = async () => {
+        const nd = collectFicheForm(state.editing);
+        const saved = await saveDossier(nd);
+        state.editing = saved;
+        window.open(`${API}/dossiers/${saved.id}/report.docx`, "_blank");
+      };
+      document.getElementById("btn-confirm-send").onclick = async (ev) => {
         const d = state.editing;
         d.statut = "envoye"; d.dateEnvoi = nowISO(); d.dernierModifiePar = state.agentName;
         await saveDossier(d);
-        state.editing = null; state.previewMode = false;
-        await loadAll(); render();
+        ev.currentTarget.disabled = true;
+        document.getElementById("send-confirm-check").style.display = "inline-block";
+        await loadAll();
+        setTimeout(() => { state.editing = null; state.previewMode = false; render(); }, 1200);
       };
       return;
     }
     if (state.editing) { app.innerHTML = screenFicheForm(state.editing); attachFicheHandlers(state.editing); return; }
     app.innerHTML = screenAgentHome();
     document.getElementById("btn-logout").onclick = doLogout;
+    state.requisitions
+      .filter((r) => r.statut === "en_attente" && !r.vuParAgentAt && (!r.assignedAgent || r.assignedAgent === state.agentName))
+      .forEach((r) => { api(`/requisitions/${r.id}/vu`, { method: "POST" }).catch(() => {}); });
     document.querySelectorAll(".req-row").forEach((row) => {
       row.onclick = async () => {
         const r = state.requisitions.find((x) => x.id === row.getAttribute("data-id"));
@@ -975,11 +1037,15 @@ async function render() {
         const err = document.getElementById("req-error");
         const file = document.getElementById("r-fichierRequisition").files[0];
         try {
-          const fd = new FormData();
-          Object.entries(r).forEach(([k, v]) => fd.append(k, v == null ? "" : v));
-          if (file) fd.append("fichierRequisition", file);
-          const res = await fetch(`${API}/requisitions`, { method: "POST", body: fd });
-          if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "Erreur serveur"); }
+          if (r.id) {
+            await api(`/requisitions/${r.id}`, { method: "PATCH", body: JSON.stringify(r) });
+          } else {
+            const fd = new FormData();
+            Object.entries(r).forEach(([k, v]) => fd.append(k, v == null ? "" : v));
+            if (file) fd.append("fichierRequisition", file);
+            const res = await fetch(`${API}/requisitions`, { method: "POST", body: fd });
+            if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "Erreur serveur"); }
+          }
           state.newRequisition = null;
           await loadAll(); render();
         } catch (e) {
@@ -1082,9 +1148,15 @@ async function render() {
         updated.statut = "rapport_genere";
         const saved = await saveDossier(updated);
         document.getElementById("report-preview").innerHTML = previewHTML(saved, "expert") +
-          `<button type="button" id="btn-download-final-report" style="margin-top:10px">⬇ Rapport PDF officiel (numéroté)</button>`;
+          `<div class="badge badge-ok" style="margin-top:10px;display:inline-block">✓ Rapport généré et envoyé par email à l'expert</div><div class="btn-row" style="margin-top:10px">
+          <button type="button" id="btn-download-final-report">⬇ Rapport PDF officiel (numéroté)</button>
+          <button type="button" id="btn-download-final-report-docx">⬇ Rapport Word (.docx)</button>
+          </div>`;
         document.getElementById("btn-download-final-report").onclick = () => {
           window.open(`${API}/dossiers/${saved.id}/report.pdf`, "_blank");
+        };
+        document.getElementById("btn-download-final-report-docx").onclick = () => {
+          window.open(`${API}/dossiers/${saved.id}/report.docx`, "_blank");
         };
       };
       document.getElementById("btn-delete-expert").onclick = async () => {
@@ -1120,6 +1192,22 @@ async function render() {
         const dd = state.dossiers.find((x) => x.id === id);
         if (!confirm(`Supprimer définitivement le dossier ${dd && dd.numeroRapport ? dd.numeroRapport : ""} de l'agent ${dd ? dd.agentName : ""} ? Cette action est irréversible.`)) return;
         await api(`/dossiers/${id}`, { method: "DELETE" });
+        await loadAll(); render();
+      };
+    });
+    document.querySelectorAll(".btn-edit-req").forEach((btn) => {
+      btn.onclick = () => {
+        const r = state.requisitions.find((x) => x.id === btn.getAttribute("data-id"));
+        state.newRequisition = { ...r };
+        render();
+      };
+    });
+    document.querySelectorAll(".btn-delete-req").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-id");
+        const r = state.requisitions.find((x) => x.id === id);
+        if (!confirm(`Supprimer définitivement la réquisition "${r ? r.siteIndicatif : ""}" ? Cette action est irréversible.`)) return;
+        await api(`/requisitions/${id}`, { method: "DELETE" });
         await loadAll(); render();
       };
     });
