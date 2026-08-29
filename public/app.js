@@ -1,6 +1,42 @@
 const API = "/api";
 const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null };
 
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `<div class="modal-box">
+      <div class="modal-msg"></div>
+      <div class="btn-row" style="margin-top:14px;justify-content:flex-end">
+        <button type="button" class="modal-cancel">Annuler</button>
+        <button type="button" class="accent modal-ok">Confirmer</button>
+      </div>
+    </div>`;
+    overlay.querySelector(".modal-msg").textContent = message;
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { document.body.removeChild(overlay); resolve(result); };
+    overlay.querySelector(".modal-cancel").onclick = () => cleanup(false);
+    overlay.querySelector(".modal-ok").onclick = () => cleanup(true);
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(false); };
+  });
+}
+function showAlert(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `<div class="modal-box">
+      <div class="modal-msg"></div>
+      <div class="btn-row" style="margin-top:14px;justify-content:flex-end">
+        <button type="button" class="accent modal-ok">OK</button>
+      </div>
+    </div>`;
+    overlay.querySelector(".modal-msg").textContent = message;
+    document.body.appendChild(overlay);
+    const cleanup = () => { document.body.removeChild(overlay); resolve(); };
+    overlay.querySelector(".modal-ok").onclick = cleanup;
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
+  });
+}
 function esc(s) {
   return (s == null ? "" : String(s)).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -205,7 +241,7 @@ function printRequisition(r) {
     <body><h1>Réquisition à Expert (Ordre de mission) — IQRA Expertise</h1>
     <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></body></html>`;
   const w = window.open("", "_blank");
-  if (!w) { alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
+  if (!w) { showAlert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
   w.document.write(html);
   w.document.close();
   w.focus();
@@ -659,7 +695,7 @@ function printPreview() {
   const node = document.getElementById("printable-preview");
   if (!node) return;
   const w = window.open("", "_blank");
-  if (!w) { alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
+  if (!w) { showAlert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorisez les pop-ups pour ce site puis réessayez."); return; }
   w.document.write(`<html><head><title>Aperçu fiche</title><style>body{font-family:sans-serif;padding:24px;color:#111}table{width:100%;border-collapse:collapse;font-size:13px}td{padding:6px 0;vertical-align:top}td:first-child{color:#666;width:40%}img{border-radius:6px}</style></head><body>${node.innerHTML}</body></html>`);
   w.document.close();
   w.focus();
@@ -936,7 +972,12 @@ async function render() {
     document.querySelectorAll(".req-row").forEach((row) => {
       row.onclick = async () => {
         const r = state.requisitions.find((x) => x.id === row.getAttribute("data-id"));
-        if (r) { state.editing = emptyDossier(r); render(); }
+        if (!r) return;
+        const saved = await saveDossier(emptyDossier(r));
+        await api(`/requisitions/${r.id}/demarrer`, { method: "POST" });
+        await loadAll();
+        state.editing = saved;
+        render();
       };
       const link = row.querySelector(".req-attachment-link");
       if (link) link.onclick = (e) => e.stopPropagation();
@@ -950,12 +991,12 @@ async function render() {
       if (delBtn) delBtn.onclick = async (e) => {
         e.stopPropagation();
         const d = state.dossiers.find((x) => x.id === row.getAttribute("data-id"));
-        if (!confirm(`Supprimer définitivement la fiche ${d && d.numeroRapport ? d.numeroRapport : ""} ? Cette action est irréversible.`)) return;
+        if (!(await showConfirm(`Supprimer définitivement la fiche ${d && d.numeroRapport ? d.numeroRapport : ""} ? Cette action est irréversible.`))) return;
         try {
           await api(`/dossiers/${row.getAttribute("data-id")}`, { method: "DELETE" });
           await loadAll(); render();
         } catch (err) {
-          alert(err.message);
+          showAlert(err.message);
         }
       };
     });
@@ -1020,13 +1061,13 @@ async function render() {
         btn.onclick = async () => {
           const id = btn.getAttribute("data-id");
           const u = state.users.find((x) => x.id === id);
-          if (!confirm(`Supprimer définitivement le compte de ${u ? u.displayName : "cet agent"} ? Cette action est irréversible.`)) return;
+          if (!(await showConfirm(`Supprimer définitivement le compte de ${u ? u.displayName : "cet agent"} ? Cette action est irréversible.`))) return;
           try {
             await api(`/users/${id}`, { method: "DELETE" });
             state.users = await api("/users");
             render();
           } catch (e) {
-            alert(e.message);
+            showAlert(e.message);
           }
         };
       });
@@ -1168,7 +1209,7 @@ async function render() {
         };
       };
       document.getElementById("btn-delete-expert").onclick = async () => {
-        if (!confirm(`Supprimer définitivement le dossier ${d.numeroRapport || ""} de l'agent ${d.agentName} ? Cette action est irréversible.`)) return;
+        if (!(await showConfirm(`Supprimer définitivement le dossier ${d.numeroRapport || ""} de l'agent ${d.agentName} ? Cette action est irréversible.`))) return;
         await api(`/dossiers/${d.id}`, { method: "DELETE" });
         state.activeDossierId = null;
         await loadAll(); render();
@@ -1198,7 +1239,7 @@ async function render() {
         e.stopPropagation();
         const id = row.getAttribute("data-id");
         const dd = state.dossiers.find((x) => x.id === id);
-        if (!confirm(`Supprimer définitivement le dossier ${dd && dd.numeroRapport ? dd.numeroRapport : ""} de l'agent ${dd ? dd.agentName : ""} ? Cette action est irréversible.`)) return;
+        if (!(await showConfirm(`Supprimer définitivement le dossier ${dd && dd.numeroRapport ? dd.numeroRapport : ""} de l'agent ${dd ? dd.agentName : ""} ? Cette action est irréversible.`))) return;
         await api(`/dossiers/${id}`, { method: "DELETE" });
         await loadAll(); render();
       };
@@ -1214,7 +1255,7 @@ async function render() {
       btn.onclick = async () => {
         const id = btn.getAttribute("data-id");
         const r = state.requisitions.find((x) => x.id === id);
-        if (!confirm(`Supprimer définitivement la réquisition "${r ? r.siteIndicatif : ""}" ? Cette action est irréversible.`)) return;
+        if (!(await showConfirm(`Supprimer définitivement la réquisition "${r ? r.siteIndicatif : ""}" ? Cette action est irréversible.`))) return;
         await api(`/requisitions/${id}`, { method: "DELETE" });
         await loadAll(); render();
       };

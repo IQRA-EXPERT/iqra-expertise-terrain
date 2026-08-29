@@ -464,6 +464,9 @@ app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition")
 app.patch("/api/requisitions/:id", requireExpert, (req, res) => {
   const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (existing.statut !== "en_attente") {
+    return res.status(403).json({ error: "L'agent a déjà démarré cette mission : la réquisition ne peut plus être modifiée par l'expert." });
+  }
   const b = req.body || {};
   const updated = {
     id: req.params.id,
@@ -488,6 +491,9 @@ app.patch("/api/requisitions/:id", requireExpert, (req, res) => {
 app.delete("/api/requisitions/:id", requireExpert, (req, res) => {
   const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (existing.statut !== "en_attente") {
+    return res.status(403).json({ error: "L'agent a déjà démarré cette mission : la réquisition ne peut plus être supprimée par l'expert." });
+  }
   if (existing.fichierRequisitionPath) {
     try { fs.unlinkSync(path.join(UPLOAD_DIR, existing.fichierRequisitionPath)); } catch (e) {}
   }
@@ -500,6 +506,15 @@ app.post("/api/requisitions/:id/vu", (req, res) => {
   if (!existing) return res.status(404).json({ error: "Introuvable" });
   if (!existing.vuParAgentAt) {
     db.prepare("UPDATE requisitions SET vuParAgentAt = ? WHERE id = ?").run(nowISO(), req.params.id);
+  }
+  res.json(db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id));
+});
+
+app.post("/api/requisitions/:id/demarrer", (req, res) => {
+  const existing = db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (existing.statut === "en_attente") {
+    db.prepare("UPDATE requisitions SET statut = 'demarree', vuParAgentAt = COALESCE(vuParAgentAt, ?) WHERE id = ?").run(nowISO(), req.params.id);
   }
   res.json(db.prepare("SELECT * FROM requisitions WHERE id = ?").get(req.params.id));
 });
