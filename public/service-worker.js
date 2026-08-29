@@ -1,4 +1,4 @@
-const CACHE_NAME = "iqra-expert-shell-v1";
+const CACHE_NAME = "iqra-expert-shell-v2";
 const SHELL_FILES = ["/", "/app.js", "/style.css", "/logo.png", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -13,10 +13,18 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// Réseau d'abord : l'app est toujours à jour dès qu'une connexion est disponible.
+// Le cache ne sert que de secours hors-ligne, jamais de version figée.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/uploads/")) return;
+  if (event.request.method !== "GET" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/uploads/")) return;
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
