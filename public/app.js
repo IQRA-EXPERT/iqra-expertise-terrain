@@ -53,12 +53,12 @@ function locateWithFallback(onSuccess, onError) {
     onSuccess,
     (e) => {
       if (e.code === e.TIMEOUT) {
-        navigator.geolocation.getCurrentPosition(onSuccess, onError, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+        navigator.geolocation.getCurrentPosition(onSuccess, onError, { enableHighAccuracy: false, timeout: 30000, maximumAge: 60000 });
       } else {
         onError(e);
       }
     },
-    { enableHighAccuracy: true, timeout: 8000 }
+    { enableHighAccuracy: true, timeout: 15000 }
   );
 }
 function haversine(lat1, lon1, lat2, lon2) {
@@ -201,7 +201,7 @@ function screenRequisitionForm(r) {
   return `<div>
     <button id="btn-cancel-req" style="margin-bottom:1rem">← Retour</button>
     <h2 style="font-size:17px;margin-bottom:4px">Réquisition à Expert (Ordre de mission)</h2>
-    <div class="muted" style="margin-bottom:16px">Déclenche la mission de l'agent. Seuls le site et un contact (client ou mandant) sont obligatoires.</div>
+    <div class="muted" style="margin-bottom:16px" id="req-hint">Déclenche la mission de l'agent. Seuls le site et un contact (client ou mandant) sont obligatoires — sauf si vous joignez le document de réquisition scanné ci-dessous, auquel cas ces champs deviennent facultatifs.</div>
     ${field("Référence du dossier", "r-referenceDossier", r.referenceDossier, { showOptional: true })}
     <div class="section-title">Client</div>
     ${field("Nom du client", "r-clientNom", r.clientNom, { showOptional: true })}
@@ -215,7 +215,7 @@ function screenRequisitionForm(r) {
     ${field("Site à visiter (commune / quartier)", "r-siteIndicatif", r.siteIndicatif, { required: true })}
     ${field("Instructions pour l'agent", "r-instructionsExpert", r.instructionsExpert, { textarea: true, showOptional: true })}
     ${field("Agent assigné", "r-assignedAgent", r.assignedAgent, { select: ["", ...Array.from(new Set(state.users.filter((u) => u.role === "agent").map((u) => u.displayName)))], showOptional: true })}
-    <label class="field"><span class="field-label">Document de réquisition original (scanné, facultatif)</span>
+    <label class="field"><span class="field-label">Document de réquisition original (scanné, facultatif — dispense des champs ci-dessus si joint)</span>
       <input type="file" id="r-fichierRequisition" accept="image/*,.pdf" /></label>
     ${r.fichierRequisitionPath ? `<div class="muted" style="margin-bottom:12px"><a class="link" href="/uploads/${esc(r.fichierRequisitionPath)}" target="_blank">📎 Voir le document déjà joint ↗</a></div>` : ""}
     <div id="req-error" class="error-text" style="display:none"></div>
@@ -1076,6 +1076,14 @@ async function render() {
     if (state.newRequisition) {
       app.innerHTML = screenRequisitionForm(state.newRequisition);
       document.getElementById("btn-cancel-req").onclick = () => { state.newRequisition = null; render(); };
+      document.getElementById("r-fichierRequisition").onchange = (e) => {
+        const hasFile = e.target.files.length > 0;
+        const marker = document.getElementById("r-siteIndicatif").closest("label").querySelector(".required, .optional");
+        if (marker) {
+          marker.textContent = hasFile ? "(facultatif — document joint)" : "*";
+          marker.className = hasFile ? "optional" : "required";
+        }
+      };
       document.getElementById("btn-download-req-pdf").onclick = () => {
         printRequisition(collectRequisitionForm(state.newRequisition));
       };

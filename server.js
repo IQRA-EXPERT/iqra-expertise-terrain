@@ -110,6 +110,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 
+// Réquisitions : chaque fichier va dans son propre sous-dossier uploads/requisitions/<id>/
+const requisitionStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(UPLOAD_DIR, "requisitions", req.reqId);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ".pdf";
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+  },
+});
+const requisitionUpload = multer({ storage: requisitionStorage, limits: { fileSize: 15 * 1024 * 1024 } });
+
 // ---------- Email (optional, requires .env credentials) ----------
 let transporter = null;
 if (process.env.SMTP_USER && process.env.SMTP_PASS) {
@@ -432,13 +446,13 @@ app.get("/api/requisitions", (req, res) => {
   res.json(rows);
 });
 
-app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition"), ah(async (req, res) => {
+app.post("/api/requisitions", requireExpert, (req, res, next) => { req.reqId = uid(); next(); }, requisitionUpload.single("fichierRequisition"), ah(async (req, res) => {
   const b = req.body;
-  if (!b.siteIndicatif || (!b.clientTelephone && !b.mandantNom)) {
-    return res.status(400).json({ error: "Le site à visiter et un contact (téléphone client ou nom du mandant) sont obligatoires." });
+  if (!req.file && (!b.siteIndicatif || (!b.clientTelephone && !b.mandantNom))) {
+    return res.status(400).json({ error: "Le site à visiter et un contact (téléphone client ou nom du mandant) sont obligatoires, sauf si vous joignez le document de réquisition scanné." });
   }
   const r = {
-    id: uid(),
+    id: req.reqId,
     dateCreation: nowISO(),
     referenceDossier: b.referenceDossier || "",
     clientNom: b.clientNom || "",
@@ -449,7 +463,7 @@ app.post("/api/requisitions", requireExpert, upload.single("fichierRequisition")
     mandantTelephone: b.mandantTelephone || "",
     siteIndicatif: b.siteIndicatif,
     instructionsExpert: b.instructionsExpert || "",
-    fichierRequisitionPath: req.file ? req.file.filename : null,
+    fichierRequisitionPath: req.file ? `requisitions/${req.reqId}/${req.file.filename}` : null,
     assignedAgent: b.assignedAgent || "",
     vuParAgentAt: null,
     statut: "en_attente",
@@ -495,7 +509,7 @@ app.delete("/api/requisitions/:id", requireExpert, (req, res) => {
     return res.status(403).json({ error: "L'agent a déjà démarré cette mission : la réquisition ne peut plus être supprimée par l'expert." });
   }
   if (existing.fichierRequisitionPath) {
-    try { fs.unlinkSync(path.join(UPLOAD_DIR, existing.fichierRequisitionPath)); } catch (e) {}
+    try { fs.rmSync(path.join(UPLOAD_DIR, "requisitions", existing.id), { recursive: true, force: true }); } catch (e) {}
   }
   db.prepare("DELETE FROM requisitions WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
