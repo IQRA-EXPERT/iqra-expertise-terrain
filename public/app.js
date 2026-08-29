@@ -1,5 +1,5 @@
 const API = "/api";
-const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false };
+const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", editingUserId: null };
 
 function esc(s) {
   return (s == null ? "" : String(s)).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -48,6 +48,7 @@ async function api(path, opts) {
 async function loadAll() {
   state.requisitions = await api("/requisitions");
   state.dossiers = await api("/dossiers");
+  if (state.role === "expert") state.users = await api("/users");
 }
 async function saveDossier(d) {
   const saved = await api("/dossiers", { method: "POST", body: JSON.stringify(d) });
@@ -130,7 +131,8 @@ function statusBadge(statut) {
 // ---------------- Screens ----------------
 function screenLogin() {
   return `<div style="max-width:360px;margin:2rem auto">
-    <h1 style="font-size:20px;margin-bottom:4px;text-align:center">IQRA Expertise</h1>
+    <img src="/logo.png" alt="IQRA-E" style="display:block;max-width:220px;margin:0 auto 12px" />
+    <h1 style="font-size:20px;margin-bottom:4px;text-align:center">IQRA EXPERT</h1>
     <div class="muted" style="margin-bottom:24px;text-align:center">Application unique — collecte terrain et traitement expert</div>
     ${field("Identifiant", "login-username", "", { required: true })}
     <label class="field"><span class="field-label">Mot de passe <span class="required">*</span></span><input id="login-password" type="password" /></label>
@@ -208,10 +210,10 @@ function screenAgentHome() {
       <button style="pointer-events:none">Démarrer</button></div>`).join("")}
     <div class="section-title">Mes fiches (${mine.length})</div>
     ${mine.length === 0 ? '<div class="muted">Aucune fiche pour le moment.</div>' : mine.map((d) => `
-      <div class="list-row mine-row" data-id="${d.id}" style="cursor:${d.statut === "brouillon" ? "pointer" : "default"}">
+      <div class="list-row mine-row" data-id="${d.id}" style="cursor:${d.statut === "brouillon" || d.statut === "envoye" ? "pointer" : "default"}">
       <div><div style="font-weight:600">${esc(d.numeroRapport) || "(sans n°)"} — ${esc(d.nomSite || d.commune) || "?"}</div>
       <div class="muted">${d.dateVisite} · ${d.photos.length} photo(s) · ${(d.distanceParcourue / 1000).toFixed(2)} km</div></div>
-      ${statusBadge(d.statut)}</div>`).join("")}
+      <div style="display:flex;align-items:center;gap:8px">${statusBadge(d.statut)}<button type="button" class="btn-delete-mine" data-id="${d.id}" aria-label="Supprimer">✕</button></div></div>`).join("")}
   </div>`;
 }
 
@@ -242,7 +244,36 @@ function anglesBlock(d) {
   const a = d.gpsAngles;
   return `<div class="card"><div style="font-weight:600;font-size:13px;margin-bottom:6px">Coordonnées GPS des angles de la parcelle</div>
     ${gpsPointRow("Point P1", "P1", a.P1)}${gpsPointRow("Point P2", "P2", a.P2)}${gpsPointRow("Point P3", "P3", a.P3)}${gpsPointRow("Point P4", "P4", a.P4)}${gpsPointRow("Centre", "Centre", a.Centre)}
+    <div style="margin-top:10px">${parcelSVG(d)}</div>
   </div>`;
+}
+function parcelSVG(d) {
+  const a = d.gpsAngles || {};
+  const pts = ["P1", "P2", "P3", "P4"].map((k) => a[k]).filter(Boolean);
+  if (pts.length < 3) return '<div class="muted">Capturez au moins 3 points d\'angle (P1 à P4) pour tracer le périmètre de la parcelle.</div>';
+  const latRef = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+  const lonRef = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
+  const toXY = (p) => [(p.lon - lonRef) * 111320 * Math.cos((latRef * Math.PI) / 180), -(p.lat - latRef) * 110540];
+  const xy = pts.map(toXY);
+  const xs = xy.map((p) => p[0]), ys = xy.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
+  const pad = Math.max(w, h) * 0.3 + 2;
+  const viewW = w + pad * 2, viewH = h + pad * 2, unit = Math.max(viewW, viewH);
+  const project = ([x, y]) => [x - minX + pad, y - minY + pad];
+  const poly = xy.map(project);
+  const centreSrc = a.Centre || { lat: d.lat, lon: d.lon };
+  const centreProj = centreSrc.lat != null ? project(toXY(centreSrc)) : project([(minX + maxX) / 2, (minY + maxY) / 2]);
+  const nomClient = (d.clientNom || d.mandantNom || d.demandeur || "CLIENT").toUpperCase().trim().replace(/\s+/g, "_");
+  const label = `CONCESSION_${nomClient}`;
+  const titre = d.numeroTitre ? `${d.typeTitre || ""} n°${d.numeroTitre}` : "";
+  return `<svg viewBox="0 0 ${viewW.toFixed(1)} ${viewH.toFixed(1)}" style="width:100%;max-width:380px;background:#f7f7f5;border:1px solid #ddd;border-radius:8px;display:block" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="${poly.map((p) => p.join(",")).join(" ")}" fill="#cfe8cf" stroke="#2e7d32" stroke-width="${(unit * 0.008).toFixed(2)}" />
+    ${poly.map((p, i) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(unit * 0.014).toFixed(2)}" fill="#2e7d32" /><text x="${p[0].toFixed(1)}" y="${(p[1] - unit * 0.02).toFixed(1)}" font-size="${(unit * 0.035).toFixed(1)}" text-anchor="middle">P${i + 1}</text>`).join("")}
+    <circle cx="${centreProj[0].toFixed(1)}" cy="${centreProj[1].toFixed(1)}" r="${(unit * 0.012).toFixed(2)}" fill="#b71c1c" />
+    <text x="${centreProj[0].toFixed(1)}" y="${(centreProj[1] + unit * 0.045).toFixed(1)}" font-size="${(unit * 0.03).toFixed(1)}" text-anchor="middle" fill="#b71c1c">${esc(label)}</text>
+    ${titre ? `<text x="${centreProj[0].toFixed(1)}" y="${(centreProj[1] + unit * 0.08).toFixed(1)}" font-size="${(unit * 0.026).toFixed(1)}" text-anchor="middle" fill="#444">${esc(titre)}</text>` : ""}
+  </svg>`;
 }
 function piecesBlock(d) {
   const rows = d.pieces.map((p) => `<div class="piece-row" data-id="${p.id}">
@@ -293,7 +324,12 @@ function trackingBlock(d) {
 
 function screenFicheForm(d) {
   return `<div id="fiche-form-wrap">
-    <button id="btn-cancel-fiche" style="margin-bottom:1rem">← Retour</button>
+    <div class="btn-row" style="margin-bottom:1rem">
+      <button type="button" id="btn-nav-refresh">⟳ Actualiser</button>
+      <button type="button" id="btn-nav-prev">← Précédent</button>
+      <button type="button" id="btn-nav-next">Suivant →</button>
+      <button type="button" id="btn-nav-quit" style="margin-left:auto">Quitter (enregistrer)</button>
+    </div>
     <h2 style="font-size:17px;margin-bottom:2px">Mission de terrain</h2>
     <div class="muted" style="margin-bottom:16px">Réquisition liée : ${esc(d.mandantType) || "—"} ${d.mandantNom ? "— " + esc(d.mandantNom) : ""} ${d.clientNom ? "· Client " + esc(d.clientNom) : ""}</div>
 
@@ -415,15 +451,18 @@ function screenPreview(d) {
   return `<div><h2 style="font-size:17px;margin-bottom:16px">Aperçu avant envoi</h2>${previewHTML(d, "agent")}
     <div class="btn-row">
       <button id="btn-back-to-edit">✎ Corriger des informations</button>
-      <button id="btn-print-pdf">⬇ Enregistrer en PDF</button>
+      <button id="btn-print-pdf">⬇ Enregistrer en PDF (aperçu rapide)</button>
+      <button id="btn-download-report-pdf">⬇ Rapport PDF officiel (numéroté)</button>
       <button class="accent" id="btn-confirm-send">Confirmer l'envoi à l'expert</button>
     </div></div>`;
 }
 
 function screenExpertHome() {
   const counts = { envoye: state.dossiers.filter((d) => d.statut === "envoye").length, en_traitement: state.dossiers.filter((d) => d.statut === "en_traitement").length, rapport_genere: state.dossiers.filter((d) => d.statut === "rapport_genere").length };
-  const visible = state.dossiers.filter((d) => d.statut !== "brouillon");
+  let visible = state.dossiers.filter((d) => d.statut !== "brouillon");
+  if (state.filterAgent) visible = visible.filter((d) => d.agentName === state.filterAgent);
   const reqPending = state.requisitions.filter((r) => r.statut === "en_attente").length;
+  const agentNames = Array.from(new Set(state.users.filter((u) => u.role === "agent").map((u) => u.displayName)));
   return `<div>
     <div class="row-between" style="margin-bottom:20px">
       <div><div style="font-weight:600;font-size:17px">Espace expert</div><div class="muted">Réquisitions et dossiers reçus</div></div>
@@ -435,7 +474,14 @@ function screenExpertHome() {
       <div class="metric-card"><div class="label">En traitement</div><div class="value">${counts.en_traitement}</div></div>
       <div class="metric-card"><div class="label">Rapports générés</div><div class="value">${counts.rapport_genere}</div></div>
     </div>
-    <div class="section-title" style="margin-top:0">Dossiers reçus des agents</div>
+    <div class="card" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <label class="field" style="flex:1;min-width:200px;margin-bottom:0"><span class="field-label">Aller directement à la session d'un agent</span>
+        <select id="f-filter-agent"><option value="">— Tous les agents —</option>${agentNames.map((n) => `<option ${n === state.filterAgent ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      </label>
+      <button type="button" id="btn-go-agent">Voir ses dossiers</button>
+      ${state.filterAgent ? `<button type="button" id="btn-clear-agent-filter">Réinitialiser</button>` : ""}
+    </div>
+    <div class="section-title" style="margin-top:0">Dossiers reçus des agents${state.filterAgent ? ` — ${esc(state.filterAgent)}` : ""}</div>
     ${visible.length === 0 ? '<div class="muted">Aucun dossier reçu pour le moment.</div>' : visible.map((d) => `
       <div class="list-row dossier-row" data-id="${d.id}"><div><div style="font-weight:600">N° ${esc(d.numeroRapport) || "—"} — ${esc(d.nomSite || d.commune) || "?"}</div>
       <div class="muted">Agent : ${esc(d.agentName)} · Indicateur : ${esc(d.indicateurNom) || "—"} · ${d.photos.length} photo(s)</div></div>
@@ -444,22 +490,40 @@ function screenExpertHome() {
 }
 
 function screenManageUsers() {
+  const editing = state.editingUserId ? state.users.find((u) => u.id === state.editingUserId) : null;
   return `<div>
     <button id="btn-back-users" style="margin-bottom:1rem">← Retour</button>
     <h2 style="font-size:17px;margin-bottom:16px">Gérer les comptes agents</h2>
-    <div class="card">
+    ${editing ? `<div class="card accent-border">
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px">Modifier l'agent — ${esc(editing.displayName)}</div>
+      ${field("Nom affiché", "eu-displayName", editing.displayName, { showOptional: true })}
+      ${field("Numéro de téléphone", "eu-telephone", editing.telephone, { showOptional: true, type: "tel" })}
+      ${field("Qualification", "eu-qualification", editing.qualification, { showOptional: true })}
+      <label class="field"><span class="field-label">Nouveau mot de passe (laisser vide pour ne pas changer)</span><input id="eu-password" type="text" placeholder="6 caractères minimum" /></label>
+      <div id="eu-error" class="error-text" style="display:none"></div>
+      <div class="btn-row">
+        <button type="button" id="btn-cancel-edit-user">Annuler</button>
+        <button class="accent" type="button" id="btn-save-edit-user">Enregistrer</button>
+      </div>
+    </div>` : `<div class="card">
       <div style="font-weight:600;font-size:13px;margin-bottom:8px">Nouveau compte agent</div>
       ${field("Identifiant de connexion", "nu-username", "", { required: true })}
       ${field("Nom affiché", "nu-displayName", "", { showOptional: true })}
+      ${field("Numéro de téléphone", "nu-telephone", "", { showOptional: true, type: "tel" })}
+      ${field("Qualification", "nu-qualification", "", { showOptional: true })}
       <label class="field"><span class="field-label">Mot de passe temporaire <span class="required">*</span></span><input id="nu-password" type="text" placeholder="6 caractères minimum" /></label>
       <div id="nu-error" class="error-text" style="display:none"></div>
       <button class="accent" id="btn-create-user">Créer le compte</button>
-    </div>
+    </div>`}
     <div class="section-title">Comptes agents existants (${state.users.filter((u) => u.role === "agent").length})</div>
     ${state.users.filter((u) => u.role === "agent").length === 0 ? '<div class="muted">Aucun agent créé pour le moment.</div>' : state.users.filter((u) => u.role === "agent").map((u) => `
       <div class="list-row" data-id="${u.id}"><div><div style="font-weight:600">${esc(u.displayName)}</div>
-      <div class="muted">Identifiant : ${esc(u.username)}</div></div>
-      <button type="button" class="btn-toggle-user" data-id="${u.id}" data-active="${u.active}">${u.active ? "Désactiver" : "Réactiver"}</button></div>`).join("")}
+      <div class="muted">Identifiant : ${esc(u.username)}${u.telephone ? " · " + esc(u.telephone) : ""}${u.qualification ? " · " + esc(u.qualification) : ""}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button type="button" class="btn-edit-user" data-id="${u.id}">Modifier</button>
+      <button type="button" class="btn-toggle-user" data-id="${u.id}" data-active="${u.active}">${u.active ? "Désactiver" : "Réactiver"}</button>
+      <button type="button" class="btn-delete-user" data-id="${u.id}">Supprimer</button>
+      </div></div>`).join("")}
   </div>`;
 }
 
@@ -510,6 +574,7 @@ function screenExpertDetail(d) {
     <div class="btn-row">
       <button id="btn-save-expert">Enregistrer les modifications</button>
       <button class="accent" id="btn-generate-report">Générer le rapport</button>
+      <button type="button" id="btn-delete-expert" style="margin-left:auto;color:#b00">Supprimer ce dossier</button>
     </div>
     <div id="report-preview" style="margin-top:20px"></div></div>`;
 }
@@ -535,7 +600,39 @@ function stopTracking() {
 
 // ---------------- Event wiring ----------------
 function attachFicheHandlers(d) {
-  document.getElementById("btn-cancel-fiche").onclick = () => { stopTracking(); state.editing = null; render(); };
+  document.getElementById("btn-nav-refresh").onclick = async () => {
+    if (d.id) { state.editing = await api(`/dossiers/${d.id}`); }
+    render();
+  };
+  document.getElementById("btn-nav-quit").onclick = async () => {
+    const nd = collectFicheForm(d);
+    await saveDossier(nd);
+    stopTracking();
+    state.editing = null;
+    await loadAll();
+    render();
+  };
+  const editableList = () => state.dossiers.filter((x) => x.agentName === state.agentName && (x.statut === "brouillon" || x.statut === "envoye"));
+  document.getElementById("btn-nav-prev").onclick = async () => {
+    const nd = collectFicheForm(d);
+    const saved = await saveDossier(nd);
+    await loadAll();
+    const list = editableList();
+    const idx = list.findIndex((x) => x.id === saved.id);
+    stopTracking();
+    state.editing = idx > 0 ? list[idx - 1] : saved;
+    render();
+  };
+  document.getElementById("btn-nav-next").onclick = async () => {
+    const nd = collectFicheForm(d);
+    const saved = await saveDossier(nd);
+    await loadAll();
+    const list = editableList();
+    const idx = list.findIndex((x) => x.id === saved.id);
+    stopTracking();
+    state.editing = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : saved;
+    render();
+  };
 
   document.getElementById("btn-capture-gps").onclick = (ev) => {
     const nd = collectFicheForm(d);
@@ -703,6 +800,12 @@ async function render() {
       app.innerHTML = screenPreview(state.editing);
       document.getElementById("btn-back-to-edit").onclick = () => { state.previewMode = false; render(); };
       document.getElementById("btn-print-pdf").onclick = printPreview;
+      document.getElementById("btn-download-report-pdf").onclick = async () => {
+        const nd = collectFicheForm(state.editing);
+        const saved = await saveDossier(nd);
+        state.editing = saved;
+        window.open(`${API}/dossiers/${saved.id}/report.pdf`, "_blank");
+      };
       document.getElementById("btn-confirm-send").onclick = async () => {
         const d = state.editing;
         d.statut = "envoye"; d.dateEnvoi = nowISO(); d.dernierModifiePar = state.agentName;
@@ -726,7 +829,19 @@ async function render() {
     document.querySelectorAll(".mine-row").forEach((row) => {
       row.onclick = () => {
         const d = state.dossiers.find((x) => x.id === row.getAttribute("data-id"));
-        if (d && d.statut === "brouillon") { state.editing = d; render(); }
+        if (d && (d.statut === "brouillon" || d.statut === "envoye")) { state.editing = d; render(); }
+      };
+      const delBtn = row.querySelector(".btn-delete-mine");
+      if (delBtn) delBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const d = state.dossiers.find((x) => x.id === row.getAttribute("data-id"));
+        if (!confirm(`Supprimer définitivement la fiche ${d && d.numeroRapport ? d.numeroRapport : ""} ? Cette action est irréversible.`)) return;
+        try {
+          await api(`/dossiers/${row.getAttribute("data-id")}`, { method: "DELETE" });
+          await loadAll(); render();
+        } catch (err) {
+          alert(err.message);
+        }
       };
     });
     return;
@@ -735,21 +850,48 @@ async function render() {
   if (state.role === "expert") {
     if (state.managingUsers) {
       app.innerHTML = screenManageUsers();
-      document.getElementById("btn-back-users").onclick = () => { state.managingUsers = false; render(); };
-      document.getElementById("btn-create-user").onclick = async () => {
+      document.getElementById("btn-back-users").onclick = () => { state.managingUsers = false; state.editingUserId = null; render(); };
+      const createBtn = document.getElementById("btn-create-user");
+      if (createBtn) createBtn.onclick = async () => {
         const username = document.getElementById("nu-username").value.trim();
         const displayName = document.getElementById("nu-displayName").value.trim();
+        const telephone = document.getElementById("nu-telephone").value.trim();
+        const qualification = document.getElementById("nu-qualification").value.trim();
         const password = document.getElementById("nu-password").value;
         const err = document.getElementById("nu-error");
         err.style.display = "none";
         try {
-          await api("/users", { method: "POST", body: JSON.stringify({ username, password, displayName }) });
+          await api("/users", { method: "POST", body: JSON.stringify({ username, password, displayName, telephone, qualification }) });
           state.users = await api("/users");
           render();
         } catch (e) {
           err.textContent = e.message; err.style.display = "block";
         }
       };
+      const cancelEditBtn = document.getElementById("btn-cancel-edit-user");
+      if (cancelEditBtn) cancelEditBtn.onclick = () => { state.editingUserId = null; render(); };
+      const saveEditBtn = document.getElementById("btn-save-edit-user");
+      if (saveEditBtn) saveEditBtn.onclick = async () => {
+        const displayName = document.getElementById("eu-displayName").value.trim();
+        const telephone = document.getElementById("eu-telephone").value.trim();
+        const qualification = document.getElementById("eu-qualification").value.trim();
+        const password = document.getElementById("eu-password").value;
+        const err = document.getElementById("eu-error");
+        err.style.display = "none";
+        try {
+          const body = { displayName, telephone, qualification };
+          if (password) body.password = password;
+          await api(`/users/${state.editingUserId}`, { method: "PATCH", body: JSON.stringify(body) });
+          state.editingUserId = null;
+          state.users = await api("/users");
+          render();
+        } catch (e) {
+          err.textContent = e.message; err.style.display = "block";
+        }
+      };
+      document.querySelectorAll(".btn-edit-user").forEach((btn) => {
+        btn.onclick = () => { state.editingUserId = btn.getAttribute("data-id"); render(); };
+      });
       document.querySelectorAll(".btn-toggle-user").forEach((btn) => {
         btn.onclick = async () => {
           const id = btn.getAttribute("data-id");
@@ -757,6 +899,20 @@ async function render() {
           await api(`/users/${id}`, { method: "PATCH", body: JSON.stringify({ active: !active }) });
           state.users = await api("/users");
           render();
+        };
+      });
+      document.querySelectorAll(".btn-delete-user").forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.getAttribute("data-id");
+          const u = state.users.find((x) => x.id === id);
+          if (!confirm(`Supprimer définitivement le compte de ${u ? u.displayName : "cet agent"} ? Cette action est irréversible.`)) return;
+          try {
+            await api(`/users/${id}`, { method: "DELETE" });
+            state.users = await api("/users");
+            render();
+          } catch (e) {
+            alert(e.message);
+          }
         };
       });
       return;
@@ -837,7 +993,17 @@ async function render() {
         let updated = collectExpertForm(d);
         updated.statut = "rapport_genere";
         const saved = await saveDossier(updated);
-        document.getElementById("report-preview").innerHTML = previewHTML(saved, "expert");
+        document.getElementById("report-preview").innerHTML = previewHTML(saved, "expert") +
+          `<button type="button" id="btn-download-final-report" style="margin-top:10px">⬇ Rapport PDF officiel (numéroté)</button>`;
+        document.getElementById("btn-download-final-report").onclick = () => {
+          window.open(`${API}/dossiers/${saved.id}/report.pdf`, "_blank");
+        };
+      };
+      document.getElementById("btn-delete-expert").onclick = async () => {
+        if (!confirm(`Supprimer définitivement le dossier ${d.numeroRapport || ""} de l'agent ${d.agentName} ? Cette action est irréversible.`)) return;
+        await api(`/dossiers/${d.id}`, { method: "DELETE" });
+        state.activeDossierId = null;
+        await loadAll(); render();
       };
       return;
     }
@@ -845,11 +1011,18 @@ async function render() {
     document.getElementById("btn-logout").onclick = doLogout;
     document.getElementById("btn-manage-users").onclick = async () => { state.users = await api("/users"); state.managingUsers = true; render(); };
     document.getElementById("btn-new-requisition").onclick = () => { state.newRequisition = emptyRequisition(); render(); };
+    document.getElementById("btn-go-agent").onclick = () => { state.filterAgent = document.getElementById("f-filter-agent").value; render(); };
+    const clearBtn = document.getElementById("btn-clear-agent-filter");
+    if (clearBtn) clearBtn.onclick = () => { state.filterAgent = ""; render(); };
     document.querySelectorAll(".dossier-row").forEach((row) => {
       row.onclick = () => { state.activeDossierId = row.getAttribute("data-id"); render(); };
     });
     return;
   }
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(() => {}));
 }
 
 (async function init() {

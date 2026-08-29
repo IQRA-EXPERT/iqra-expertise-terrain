@@ -8,11 +8,13 @@ const multer = require("multer");
 const Database = require("better-sqlite3");
 const nodemailer = require("nodemailer");
 const ExcelJS = require("exceljs");
+const PDFDocument = require("pdfkit");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, "data");
 const UPLOAD_DIR = path.join(__dirname, "uploads");
+const LOGO_PATH = path.join(__dirname, "public", "logo.png");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -72,6 +74,8 @@ CREATE TABLE IF NOT EXISTS users (
   passwordHash TEXT,
   role TEXT,
   displayName TEXT,
+  telephone TEXT,
+  qualification TEXT,
   active INTEGER DEFAULT 1,
   createdAt TEXT
 );
@@ -87,6 +91,8 @@ ensureColumn("dossiers", "hauteurAcrotere", "TEXT");
 ensureColumn("dossiers", "prixBase", "TEXT");
 ensureColumn("dossiers", "prixChoisi", "TEXT");
 ensureColumn("dossiers", "etatBatiment", "TEXT");
+ensureColumn("users", "telephone", "TEXT");
+ensureColumn("users", "qualification", "TEXT");
 ensureColumn("requisitions", "fichierRequisitionPath", "TEXT");
 
 // ---------- Uploads (photos) ----------
@@ -195,6 +201,72 @@ function coefficientEtatBatiment(etat) {
   return COEFFICIENTS_ETAT_BATIMENT[etat] != null ? COEFFICIENTS_ETAT_BATIMENT[etat] : 1.0;
 }
 
+function computeParcelGeometry(d) {
+  const a = d.gpsAngles || {};
+  const pts = ["P1", "P2", "P3", "P4"].map((k) => a[k]).filter(Boolean);
+  if (pts.length < 3) return null;
+  const latRef = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+  const lonRef = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
+  const toXY = (p) => [(p.lon - lonRef) * 111320 * Math.cos((latRef * Math.PI) / 180), -(p.lat - latRef) * 110540];
+  const xy = pts.map(toXY);
+  const xs = xy.map((p) => p[0]), ys = xy.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const centreSrc = a.Centre || (d.lat != null ? { lat: d.lat, lon: d.lon } : null);
+  const centre = centreSrc ? toXY(centreSrc) : [(minX + maxX) / 2, (minY + maxY) / 2];
+  const nomClient = (d.clientNom || d.mandantNom || d.demandeur || "CLIENT").toUpperCase().trim().replace(/\s+/g, "_");
+  return {
+    points: xy,
+    bounds: { minX, maxX, minY, maxY },
+    centre,
+    label: `CONCESSION_${nomClient}`,
+    titre: d.numeroTitre ? `${d.typeTitre || ""} n°${d.numeroTitre}` : "",
+  };
+}
+
+function drawWatermark(doc) {
+  if (!fs.existsSync(LOGO_PATH)) return;
+  const pageWidth = doc.page.width, pageHeight = doc.page.height;
+  doc.save();
+  doc.opacity(0.06).image(LOGO_PATH, pageWidth / 2 - 150, pageHeight / 2 - 75, { width: 300 });
+  doc.restore();
+}
+function drawHeaderFooterChrome(doc, pageNum, totalPages) {
+  const pageWidth = doc.page.width, pageHeight = doc.page.height;
+  const originalBottomMargin = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
+  doc.save();
+  if (fs.existsSync(LOGO_PATH)) doc.image(LOGO_PATH, 40, 20, { height: 28 });
+  doc.fillColor("#1b5e20").fontSize(13).font("Helvetica-Bold").text("IQRA EXPERT", 100, 22, { lineBreak: false });
+  doc.fillColor("#666").fontSize(8).font("Helvetica").text("Ingénierie Qualité Recherche et Assistance en Expertise", 100, 38, { lineBreak: false });
+  doc.moveTo(40, 58).lineTo(pageWidth - 40, 58).strokeColor("#2e7d32").lineWidth(1).stroke();
+  doc.moveTo(40, pageHeight - 40).lineTo(pageWidth - 40, pageHeight - 40).strokeColor("#ddd").lineWidth(0.5).stroke();
+  doc.fillColor("#666").fontSize(8).text(`Document généré le ${new Date().toLocaleDateString("fr-FR")}`, 40, pageHeight - 32, { lineBreak: false });
+  doc.text(`Page ${pageNum} / ${totalPages}`, 40, pageHeight - 32, { align: "right", width: pageWidth - 80, lineBreak: false });
+  doc.restore();
+  doc.page.margins.bottom = originalBottomMargin;
+}
+
+function drawParcelDiagram(doc, geometry, x, y, boxSize) {
+  const { points, bounds, centre, label, titre } = geometry;
+  const w = Math.max(bounds.maxX - bounds.minX, 1), h = Math.max(bounds.maxY - bounds.minY, 1);
+  const scale = (boxSize * 0.7) / Math.max(w, h);
+  const project = ([px, py]) => [x + boxSize / 2 + (px - (bounds.minX + bounds.maxX) / 2) * scale, y + boxSize / 2 + (py - (bounds.minY + bounds.maxY) / 2) * scale];
+  const poly = points.map(project);
+  doc.save();
+  doc.rect(x, y, boxSize, boxSize).fillColor("#f7f7f5").fill();
+  doc.polygon(...poly).fillColor("#cfe8cf").fillOpacity(0.7).fill().fillOpacity(1);
+  doc.polygon(...poly).strokeColor("#2e7d32").lineWidth(1.2).stroke();
+  poly.forEach((p, i) => {
+    doc.circle(p[0], p[1], 2.5).fillColor("#2e7d32").fill();
+    doc.fillColor("#111").fontSize(8).text(`P${i + 1}`, p[0] - 8, p[1] - 14, { width: 16, align: "center" });
+  });
+  const c = project(centre);
+  doc.circle(c[0], c[1], 2.5).fillColor("#b71c1c").fill();
+  doc.fillColor("#b71c1c").fontSize(7).text(label, x, c[1] + 6, { width: boxSize, align: "center" });
+  if (titre) doc.fillColor("#444").fontSize(7).text(titre, x, c[1] + 16, { width: boxSize, align: "center" });
+  doc.restore();
+}
+
 function rowToRequisition(r) {
   return r;
 }
@@ -272,12 +344,12 @@ app.use("/api", requireAuth);
 // API: Comptes utilisateurs (réservé à l'expert)
 // =========================================================
 app.get("/api/users", requireExpert, (req, res) => {
-  const rows = db.prepare("SELECT id, username, role, displayName, active, createdAt FROM users ORDER BY createdAt DESC").all();
+  const rows = db.prepare("SELECT id, username, role, displayName, telephone, qualification, active, createdAt FROM users ORDER BY createdAt DESC").all();
   res.json(rows);
 });
 
 app.post("/api/users", requireExpert, (req, res) => {
-  const { username, password, displayName } = req.body || {};
+  const { username, password, displayName, telephone, qualification } = req.body || {};
   if (!username || !password || password.length < 6) {
     return res.status(400).json({ error: "Identifiant et mot de passe (6 caractères minimum) requis." });
   }
@@ -289,21 +361,41 @@ app.post("/api/users", requireExpert, (req, res) => {
     passwordHash: hashPassword(password),
     role: "agent",
     displayName: displayName || username,
+    telephone: telephone || "",
+    qualification: qualification || "",
     active: 1,
     createdAt: nowISO(),
   };
   db.prepare(
-    "INSERT INTO users (id,username,passwordHash,role,displayName,active,createdAt) VALUES (@id,@username,@passwordHash,@role,@displayName,@active,@createdAt)"
+    "INSERT INTO users (id,username,passwordHash,role,displayName,telephone,qualification,active,createdAt) VALUES (@id,@username,@passwordHash,@role,@displayName,@telephone,@qualification,@active,@createdAt)"
   ).run(u);
-  res.json({ id: u.id, username: u.username, role: u.role, displayName: u.displayName, active: u.active, createdAt: u.createdAt });
+  res.json({ id: u.id, username: u.username, role: u.role, displayName: u.displayName, telephone: u.telephone, qualification: u.qualification, active: u.active, createdAt: u.createdAt });
 });
 
 app.patch("/api/users/:id", requireExpert, (req, res) => {
   const existing = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
   if (!existing) return res.status(404).json({ error: "Introuvable" });
-  const active = req.body.active != null ? (req.body.active ? 1 : 0) : existing.active;
-  db.prepare("UPDATE users SET active = ? WHERE id = ?").run(active, req.params.id);
-  res.json({ id: existing.id, username: existing.username, role: existing.role, displayName: existing.displayName, active });
+  const b = req.body || {};
+  const updated = {
+    id: req.params.id,
+    active: b.active != null ? (b.active ? 1 : 0) : existing.active,
+    displayName: b.displayName != null ? b.displayName : existing.displayName,
+    telephone: b.telephone != null ? b.telephone : existing.telephone,
+    qualification: b.qualification != null ? b.qualification : existing.qualification,
+    passwordHash: b.password ? hashPassword(b.password) : existing.passwordHash,
+  };
+  db.prepare("UPDATE users SET active = @active, displayName = @displayName, telephone = @telephone, qualification = @qualification, passwordHash = @passwordHash WHERE id = @id")
+    .run(updated);
+  const row = db.prepare("SELECT id, username, role, displayName, telephone, qualification, active, createdAt FROM users WHERE id = ?").get(req.params.id);
+  res.json(row);
+});
+
+app.delete("/api/users/:id", requireExpert, (req, res) => {
+  const existing = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Introuvable" });
+  if (existing.id === req.session.userId) return res.status(400).json({ error: "Vous ne pouvez pas supprimer votre propre compte." });
+  db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
 });
 
 // =========================================================
@@ -363,6 +455,22 @@ app.get("/api/dossiers/:id", (req, res) => {
   res.json(rowToDossier(row));
 });
 
+app.delete("/api/dossiers/:id", (req, res) => {
+  const dossier = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!dossier) return res.status(404).json({ error: "Introuvable" });
+  if (req.session.role !== "expert") {
+    const user = db.prepare("SELECT displayName FROM users WHERE id = ?").get(req.session.userId);
+    if (!user || dossier.agentName !== user.displayName) {
+      return res.status(403).json({ error: "Vous ne pouvez supprimer que vos propres fiches." });
+    }
+  }
+  const photos = db.prepare("SELECT filename FROM photos WHERE dossierId = ?").all(req.params.id);
+  photos.forEach((p) => { try { fs.unlinkSync(path.join(UPLOAD_DIR, p.filename)); } catch (e) {} });
+  db.prepare("DELETE FROM photos WHERE dossierId = ?").run(req.params.id);
+  db.prepare("DELETE FROM dossiers WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
 app.get("/api/dossiers/:id/export.xlsx", async (req, res) => {
   const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Introuvable" });
@@ -414,6 +522,95 @@ app.get("/api/dossiers/:id/export.xlsx", async (req, res) => {
   res.setHeader("Content-Disposition", `attachment; filename="dossier-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.xlsx"`);
   await workbook.xlsx.write(res);
   res.end();
+});
+
+app.get("/api/dossiers/:id/report.pdf", (req, res) => {
+  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Introuvable" });
+  const d = rowToDossier(row);
+  const isExpertReport = d.statut === "rapport_genere" || d.statut === "en_traitement";
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="rapport-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf"`);
+
+  const doc = new PDFDocument({ bufferPages: true, size: "A4", margins: { top: 80, bottom: 60, left: 50, right: 50 } });
+  doc.on("pageAdded", () => drawWatermark(doc));
+  drawWatermark(doc);
+  doc.pipe(res);
+
+  const row2 = (k, v) => {
+    const y = doc.y;
+    doc.fillColor("#666").fontSize(9).font("Helvetica").text(k, 50, y, { width: 150 });
+    doc.fillColor("#111").fontSize(9).font("Helvetica").text(v || "—", 210, y, { width: doc.page.width - 260 });
+    doc.moveDown(0.3);
+  };
+
+  doc.fillColor("#111").fontSize(15).font("Helvetica-Bold").text(isExpertReport ? "Rapport d'expertise" : "Fiche de visite terrain", { align: "left" });
+  doc.fillColor("#666").fontSize(10).font("Helvetica").text(`N° ${d.numeroRapport || "—"} — ${d.nomSite || d.commune || "—"}`);
+  doc.moveDown(0.8);
+
+  row2("Mandant / Client", `${d.mandantType || ""} ${d.mandantNom || ""}${d.clientNom ? " · " + d.clientNom : ""}`);
+  row2("Équipe", (d.equipe || []).map((e) => e.nom).filter(Boolean).join(", "));
+  row2("Indicateur de terrain", d.indicateurNom ? `${d.indicateurNom} ${d.indicateurPrenom} — ${d.indicateurTelephone} (${d.indicateurType})` : "");
+  row2("Localisation", `${d.quartier || ""}, ${d.commune || "—"} (${d.cercle || "—"}, ${d.region || "—"})`);
+  row2("Coordonnées UTM", d.utm ? `Zone ${d.utm.zone}${d.utm.hemisphere} — E ${d.utm.easting}, N ${d.utm.northing}` : "");
+  row2("Titre", `${d.typeTitre || "—"} n°${d.numeroTitre || "—"}`);
+  row2("Nature / État / VRD", [...(d.natureParcelle || []), ...(d.etatTerrain || []), ...(d.vrd || [])].join(", "));
+  row2("Dimensions parcelle", `${d.longueurParcelle || "—"} m × ${d.largeurParcelle || "—"} m`);
+  row2("Hauteur murs / acrotère", `${d.hauteurMur || "—"} m / ${d.hauteurAcrotere || "—"} m`);
+  row2("État du bâtiment", d.etatBatiment || "—");
+  if (isExpertReport) {
+    row2("Prix de base", d.prixBase ? `${d.prixBase} FCFA/m²` : "");
+    row2("Prix choisi par l'expert", d.prixChoisi ? `${d.prixChoisi} FCFA/m²` : "");
+    row2("Méthode d'évaluation", d.methodeEvaluation || "");
+    row2("Conclusion", d.conclusion || "");
+  }
+
+  const geometry = computeParcelGeometry(d);
+  if (geometry) {
+    doc.moveDown(0.5);
+    doc.fillColor("#111").fontSize(10).font("Helvetica-Bold").text("Périmètre de la parcelle");
+    doc.moveDown(0.3);
+    const boxSize = 220;
+    if (doc.y + boxSize > doc.page.height - doc.page.margins.bottom) doc.addPage();
+    const diagramTop = doc.y;
+    drawParcelDiagram(doc, geometry, 50, diagramTop, boxSize);
+    doc.x = 50;
+    doc.y = diagramTop + boxSize + 10;
+  }
+
+  if (d.pieces && d.pieces.length) {
+    doc.moveDown(0.5);
+    doc.fillColor("#111").fontSize(10).font("Helvetica-Bold").text("Relevé des pièces");
+    doc.moveDown(0.2);
+    d.pieces.forEach((p) => {
+      row2(p.designation || "—", `${p.niveau || ""} · Qté ${p.quantite || "—"} · ${p.superficie || "—"} m²`);
+    });
+  }
+
+  if (d.photos && d.photos.length) {
+    doc.addPage();
+    doc.fillColor("#111").fontSize(10).font("Helvetica-Bold").text("Photos");
+    doc.moveDown(0.3);
+    let x = 50, y = doc.y;
+    const imgSize = 150;
+    d.photos.forEach((p, i) => {
+      const filePath = path.join(UPLOAD_DIR, path.basename(p.url));
+      if (fs.existsSync(filePath)) {
+        try { doc.image(filePath, x, y, { width: imgSize, height: imgSize, fit: [imgSize, imgSize] }); } catch (e) {}
+      }
+      x += imgSize + 15;
+      if ((i + 1) % 3 === 0) { x = 50; y += imgSize + 15; }
+      if (y + imgSize > doc.page.height - doc.page.margins.bottom && (i + 1) % 3 === 0) { doc.addPage(); y = doc.y; }
+    });
+  }
+
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    drawHeaderFooterChrome(doc, i + 1, range.count);
+  }
+  doc.end();
 });
 
 // =========================================================
@@ -509,8 +706,23 @@ function upsertDossier(b) {
   return id;
 }
 
+function nextNumeroRapport() {
+  const year = new Date().getFullYear();
+  const prefix = `RPT-${year}-`;
+  const row = db.prepare("SELECT numeroRapport FROM dossiers WHERE numeroRapport LIKE ? ORDER BY numeroRapport DESC LIMIT 1").get(prefix + "%");
+  let seq = 1;
+  if (row && row.numeroRapport) {
+    const match = row.numeroRapport.match(/(\d+)$/);
+    if (match) seq = parseInt(match[1], 10) + 1;
+  }
+  return prefix + String(seq).padStart(4, "0");
+}
+
 app.post("/api/dossiers", ah(async (req, res) => {
   const b = req.body;
+  if (b.statut === "envoye" && !b.numeroRapport) {
+    b.numeroRapport = nextNumeroRapport();
+  }
   const id = upsertDossier(b);
   if (b.statut === "envoye" && b.requisitionId) {
     db.prepare("UPDATE requisitions SET statut = 'visitee' WHERE id = ?").run(b.requisitionId);
