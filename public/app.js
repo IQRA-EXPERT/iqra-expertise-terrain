@@ -1,5 +1,5 @@
 const API = "/api";
-const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null };
+const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null, googleMapsApiKey: "", openMaps: {} };
 
 function showConfirm(message) {
   return new Promise((resolve) => {
@@ -67,6 +67,60 @@ function haversine(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+// Miroir client de toUTM() côté serveur (server.js) — permet un affichage immédiat sans aller-retour serveur.
+function toUTM(lat, lon) {
+  const a = 6378137.0, eccSq = 0.00669438, k0 = 0.9996;
+  const radLat = (lat * Math.PI) / 180, radLon = (lon * Math.PI) / 180;
+  const zone = Math.floor((lon + 180) / 6) + 1;
+  const radLonOrigin = (((zone - 1) * 6 - 180 + 3) * Math.PI) / 180;
+  const eccP = eccSq / (1 - eccSq);
+  const N = a / Math.sqrt(1 - eccSq * Math.sin(radLat) ** 2);
+  const T = Math.tan(radLat) ** 2, C = eccP * Math.cos(radLat) ** 2, A = Math.cos(radLat) * (radLon - radLonOrigin);
+  const M =
+    a *
+    ((1 - eccSq / 4 - (3 * eccSq * eccSq) / 64 - (5 * Math.pow(eccSq, 3)) / 256) * radLat -
+      ((3 * eccSq) / 8 + (3 * eccSq * eccSq) / 32 + (45 * Math.pow(eccSq, 3)) / 1024) * Math.sin(2 * radLat) +
+      ((15 * eccSq * eccSq) / 256 + (45 * Math.pow(eccSq, 3)) / 1024) * Math.sin(4 * radLat) -
+      ((35 * Math.pow(eccSq, 3)) / 3072) * Math.sin(6 * radLat));
+  let easting = k0 * N * (A + ((1 - T + C) * Math.pow(A, 3)) / 6 + ((5 - 18 * T + T * T + 72 * C - 58 * eccP) * Math.pow(A, 5)) / 120) + 500000;
+  let northing =
+    k0 *
+    (M +
+      N *
+        Math.tan(radLat) *
+        ((A * A) / 2 + ((5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4)) / 24 + ((61 - 58 * T + T * T + 600 * C - 330 * eccP) * Math.pow(A, 6)) / 720));
+  if (lat < 0) northing += 10000000;
+  return { zone, hemisphere: lat >= 0 ? "N" : "S", easting: Math.round(easting), northing: Math.round(northing) };
+}
+function utmString(pt) {
+  if (!pt || pt.lat == null) return "";
+  const u = toUTM(pt.lat, pt.lon);
+  return `Zone ${u.zone}${u.hemisphere} — E ${u.easting} m, N ${u.northing} m`;
+}
+function mapEmbed(key, lat, lon) {
+  if (!state.openMaps[key]) return "";
+  if (!state.googleMapsApiKey) return '<div class="muted" style="margin:6px 0">Carte non configurée (clé Google Maps manquante côté serveur).</div>';
+  const src = `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(state.googleMapsApiKey)}&q=${lat},${lon}&zoom=17`;
+  return `<iframe class="gmap-embed" src="${src}" style="width:100%;height:220px;border:0;border-radius:8px;margin:8px 0" loading="lazy" allowfullscreen></iframe>`;
+}
+function gpsCoordsTable(d) {
+  const pts = [];
+  if (d.lat != null) pts.push({ label: "Position centrale du site", lat: d.lat, lon: d.lon });
+  const a = d.gpsAngles || {};
+  [["P1", "Point P1"], ["P2", "Point P2"], ["P3", "Point P3"], ["P4", "Point P4"], ["Centre", "Centre de la parcelle"]].forEach(([k, label]) => {
+    if (a[k]) pts.push({ label, lat: a[k].lat, lon: a[k].lon });
+  });
+  if (!pts.length) return "";
+  const rows = pts
+    .map((p) => {
+      const u = toUTM(p.lat, p.lon);
+      return `<tr><td>${esc(p.label)}</td><td>${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}</td><td>Zone ${u.zone}${u.hemisphere} — E ${u.easting} m, N ${u.northing} m</td></tr>`;
+    })
+    .join("");
+  return `<div class="card"><div style="font-weight:600;font-size:13px;margin-bottom:6px">Tableau des coordonnées GPS</div>
+    <table class="info-table gps-coords-table"><tr><td style="font-weight:600">Point</td><td style="font-weight:600">Latitude / Longitude</td><td style="font-weight:600">UTM (WGS84)</td></tr>${rows}</table>
+  </div>`;
+}
 
 async function api(path, opts) {
   const res = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -85,6 +139,9 @@ async function loadAll() {
   state.requisitions = await api("/requisitions");
   state.dossiers = await api("/dossiers");
   if (state.role === "expert") state.users = await api("/users");
+  if (!state.googleMapsApiKey) {
+    try { state.googleMapsApiKey = (await api("/config")).googleMapsApiKey || ""; } catch (e) {}
+  }
 }
 async function saveDossier(d) {
   const saved = await api("/dossiers", { method: "POST", body: JSON.stringify(d) });
@@ -292,19 +349,28 @@ function photoGallery(photos) {
   return body + '<div class="muted" style="font-style:italic;margin-bottom:8px">Images IQRA-EXPERT</div>';
 }
 function gpsPointRow(label, key, pt) {
-  return `<div class="gps-point-row"><div>${label}${pt ? `<div class="muted">${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}</div>` : ""}</div>
-    <button type="button" class="btn-cap-angle" data-key="${key}">${pt ? "Reprendre" : "Capturer"}</button></div>`;
+  return `<div class="gps-point-row"><div>${label}${pt ? `<div class="muted">${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}</div><div class="muted">${utmString(pt)}</div>` : ""}</div>
+    <div class="btn-row" style="gap:6px;margin-top:0">
+      ${pt ? `<button type="button" class="btn-toggle-map" data-key="${key}">${state.openMaps[key] ? "Masquer la carte" : "Voir sur la carte"}</button>` : ""}
+      <button type="button" class="btn-cap-angle" data-key="${key}">${pt ? "Reprendre" : "Capturer"}</button>
+    </div></div>
+    ${pt ? mapEmbed(key, pt.lat, pt.lon) : ""}`;
 }
 function locBlock(d) {
   const hasLoc = d.lat != null;
+  const u = hasLoc ? toUTM(d.lat, d.lon) : null;
   return `<div class="card">
     <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Position centrale du site</div>
     <button type="button" id="btn-capture-gps">${hasLoc ? "Actualiser" : "Capturer ma position"}</button></div>
     <div id="gps-error" class="error-text" style="display:none"></div>
     ${hasLoc ? `<table class="info-table">
       <tr><td>Latitude / Longitude</td><td>${d.lat.toFixed(6)}, ${d.lon.toFixed(6)}</td></tr>
-      <tr><td>UTM (WGS84)</td><td>Zone ${d.utm.zone}${d.utm.hemisphere} — E ${d.utm.easting} m, N ${d.utm.northing} m</td></tr></table>
-      <a class="link" href="https://www.google.com/maps/@${d.lat},${d.lon},400m/data=!3m1!1e3" target="_blank">Voir la vue satellite (Google Maps) ↗</a>`
+      <tr><td>UTM (WGS84)</td><td>Zone ${u.zone}${u.hemisphere} — E ${u.easting} m, N ${u.northing} m</td></tr></table>
+      <div class="btn-row" style="gap:6px;margin-top:6px">
+        <button type="button" class="btn-toggle-map" data-key="site">${state.openMaps.site ? "Masquer la carte" : "Voir sur la carte"}</button>
+        <a class="link" href="https://www.google.com/maps/@${d.lat},${d.lon},400m/data=!3m1!1e3" target="_blank">Voir la vue satellite (Google Maps) ↗</a>
+      </div>
+      ${mapEmbed("site", d.lat, d.lon)}`
       : '<div class="muted">Aucune position capturée.</div>'}
   </div>`;
 }
@@ -422,6 +488,7 @@ function screenFicheForm(d) {
     ${field("Adresse / repère", "f-adresse", d.adresse)}
     ${locBlock(d)}
     ${anglesBlock(d)}
+    ${gpsCoordsTable(d)}
     ${field("Longueur de la parcelle (m)", "f-longueurParcelle", d.longueurParcelle, { showOptional: true })}
     ${field("Largeur de la parcelle (m)", "f-largeurParcelle", d.largeurParcelle, { showOptional: true })}
 
@@ -774,6 +841,14 @@ function attachFicheHandlers(d) {
         (pos) => { nd.gpsAngles[key] = { lat: pos.coords.latitude, lon: pos.coords.longitude }; state.editing = nd; render(); },
         () => { b.disabled = false; b.textContent = prevLabel; }
       );
+    };
+  });
+  document.querySelectorAll(".btn-toggle-map").forEach((btn) => {
+    btn.onclick = () => {
+      const key = btn.getAttribute("data-key");
+      state.openMaps[key] = !state.openMaps[key];
+      state.editing = collectFicheForm(d);
+      render();
     };
   });
   document.getElementById("btn-add-piece").onclick = () => {

@@ -353,6 +353,15 @@ function toUTM(lat, lon) {
   if (lat < 0) northing += 10000000;
   return { zone, hemisphere: lat >= 0 ? "N" : "S", easting: Math.round(easting), northing: Math.round(northing) };
 }
+function gpsPointsList(d) {
+  const pts = [];
+  if (d.lat != null && d.lon != null) pts.push({ label: "Position centrale du site", lat: d.lat, lon: d.lon });
+  const a = d.gpsAngles || {};
+  [["P1", "Point P1"], ["P2", "Point P2"], ["P3", "Point P3"], ["P4", "Point P4"], ["Centre", "Centre de la parcelle"]].forEach(([k, label]) => {
+    if (a[k] && a[k].lat != null && a[k].lon != null) pts.push({ label, lat: a[k].lat, lon: a[k].lon });
+  });
+  return pts.map((p) => ({ ...p, utm: toUTM(p.lat, p.lon) }));
+}
 
 // =========================================================
 // API: Authentification
@@ -379,6 +388,10 @@ app.get("/api/me", requireAuth, (req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.get("/api/config", (req, res) => {
+  res.json({ googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || "" });
+});
 
 // =========================================================
 // API: Comptes utilisateurs (réservé à l'expert)
@@ -614,6 +627,21 @@ app.get("/api/dossiers/:id/export.xlsx", ah(async (req, res) => {
   ].forEach((r) => calcSheet.addRow({ label: r[0], value: r[1] }));
   calcSheet.getColumn(1).font = { bold: true };
 
+  const gpsPoints = gpsPointsList(d);
+  if (gpsPoints.length) {
+    const gpsSheet = workbook.addWorksheet("Coordonnées GPS");
+    gpsSheet.columns = [
+      { header: "Point", key: "point", width: 26 },
+      { header: "Latitude", key: "lat", width: 14 },
+      { header: "Longitude", key: "lon", width: 14 },
+      { header: "Zone UTM", key: "zone", width: 10 },
+      { header: "Easting (m)", key: "easting", width: 14 },
+      { header: "Northing (m)", key: "northing", width: 14 },
+    ];
+    gpsPoints.forEach((p) => gpsSheet.addRow({ point: p.label, lat: p.lat, lon: p.lon, zone: `${p.utm.zone}${p.utm.hemisphere}`, easting: p.utm.easting, northing: p.utm.northing }));
+    gpsSheet.getRow(1).font = { bold: true };
+  }
+
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="dossier-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.xlsx"`);
   await workbook.xlsx.write(res);
@@ -671,6 +699,16 @@ function generateReportPdfBuffer(d) {
     drawParcelDiagram(doc, geometry, 50, diagramTop, boxSize);
     doc.x = 50;
     doc.y = diagramTop + boxSize + 10;
+  }
+
+  const gpsPoints = gpsPointsList(d);
+  if (gpsPoints.length) {
+    doc.moveDown(0.5);
+    doc.fillColor("#111").fontSize(10).font("Helvetica-Bold").text("Tableau des coordonnées GPS");
+    doc.moveDown(0.3);
+    gpsPoints.forEach((p) => {
+      row2(p.label, `Lat/Lon ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)} — UTM Zone ${p.utm.zone}${p.utm.hemisphere} E ${p.utm.easting} N ${p.utm.northing}`);
+    });
   }
 
   if (d.pieces && d.pieces.length) {
@@ -747,6 +785,20 @@ async function generateReportDocxBuffer(d) {
     infoTable,
     new Paragraph({ text: "" }),
   ];
+  const gpsPointsDocx = gpsPointsList(d);
+  if (gpsPointsDocx.length) {
+    children.push(new Paragraph({ children: [new TextRun({ text: "Tableau des coordonnées GPS", bold: true })] }));
+    children.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({ children: ["Point", "Latitude / Longitude", "UTM (WGS84)"].map((h) => cell(h, { bold: true })) }),
+          ...gpsPointsDocx.map((p) => new TableRow({ children: [cell(p.label), cell(`${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`), cell(`Zone ${p.utm.zone}${p.utm.hemisphere} — E ${p.utm.easting}, N ${p.utm.northing}`)] })),
+        ],
+      })
+    );
+    children.push(new Paragraph({ text: "" }));
+  }
   if (d.pieces && d.pieces.length) {
     children.push(new Paragraph({ children: [new TextRun({ text: "Relevé des pièces", bold: true })] }));
     children.push(
