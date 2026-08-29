@@ -488,6 +488,7 @@ function screenPreview(d) {
       <button id="btn-print-pdf">⬇ Enregistrer en PDF (aperçu rapide)</button>
       <button id="btn-download-report-pdf">⬇ Rapport PDF officiel (numéroté)</button>
       <button id="btn-download-report-docx">⬇ Rapport Word (.docx)</button>
+      <button type="button" id="btn-share-whatsapp">📤 Partager par WhatsApp</button>
       <button class="accent" id="btn-confirm-send">Confirmer l'envoi à l'expert</button>
       <span id="send-confirm-check" class="badge badge-ok" style="display:none">✓ Envoyé</span>
     </div></div>`;
@@ -650,6 +651,10 @@ function collectExpertForm(base) {
   return { ...base, expertNotes: g("e-expertNotes"), prixReference: g("e-prixReference"), prixBase: g("e-prixBase"), prixChoisi: g("e-prixChoisi"), methodeEvaluation: g("e-methodeEvaluation"), conclusion: g("e-conclusion"), dernierModifiePar: "Expert" };
 }
 
+function shareReportViaWhatsApp(d) {
+  const text = `Rapport IQRA EXPERT — N° ${d.numeroRapport || "sans n°"} (${d.nomSite || d.commune || "site non renseigné"}).\nMerci de joindre le fichier PDF/Word téléchargé depuis l'application à ce message.`;
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+}
 function printPreview() {
   const node = document.getElementById("printable-preview");
   if (!node) return;
@@ -910,6 +915,7 @@ async function render() {
         state.editing = saved;
         window.open(`${API}/dossiers/${saved.id}/report.docx`, "_blank");
       };
+      document.getElementById("btn-share-whatsapp").onclick = () => shareReportViaWhatsApp(state.editing);
       document.getElementById("btn-confirm-send").onclick = async (ev) => {
         const d = state.editing;
         d.statut = "envoye"; d.dateEnvoi = nowISO(); d.dernierModifiePar = state.agentName;
@@ -1151,10 +1157,12 @@ async function render() {
           `<div class="badge badge-ok" style="margin-top:10px;display:inline-block">✓ Rapport généré et envoyé par email à l'expert</div><div class="btn-row" style="margin-top:10px">
           <button type="button" id="btn-download-final-report">⬇ Rapport PDF officiel (numéroté)</button>
           <button type="button" id="btn-download-final-report-docx">⬇ Rapport Word (.docx)</button>
+          <button type="button" id="btn-share-whatsapp-final">📤 Partager par WhatsApp</button>
           </div>`;
         document.getElementById("btn-download-final-report").onclick = () => {
           window.open(`${API}/dossiers/${saved.id}/report.pdf`, "_blank");
         };
+        document.getElementById("btn-share-whatsapp-final").onclick = () => shareReportViaWhatsApp(saved);
         document.getElementById("btn-download-final-report-docx").onclick = () => {
           window.open(`${API}/dossiers/${saved.id}/report.docx`, "_blank");
         };
