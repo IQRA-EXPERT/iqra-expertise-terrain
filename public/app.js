@@ -108,9 +108,11 @@ function gpsPointsListClient(d) {
 }
 function gpsMapCard(d) {
   const pts = gpsPointsListClient(d);
-  if (!pts.length) return "";
+  const track = d.trackingPoints || [];
+  if (!pts.length && !track.length) return "";
+  const trackLabel = track.length ? ` · itinéraire ${(d.distanceParcourue / 1000).toFixed(2)} km (${track.length} pts)` : "";
   return `<div class="card">
-    <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})</div>
+    <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})${trackLabel}</div>
     <button type="button" id="btn-toggle-gps-map">${state.openMaps.all ? "Masquer la carte" : "Voir sur la carte"}</button></div>
     ${state.openMaps.all ? '<div id="gps-map" style="width:100%;height:320px;border-radius:8px"></div>' : ""}
   </div>`;
@@ -121,7 +123,8 @@ function initGpsMap(d) {
   if (!container || typeof L === "undefined") return;
   if (gpsMapInstance) { gpsMapInstance.remove(); gpsMapInstance = null; }
   const pts = gpsPointsListClient(d);
-  if (!pts.length) return;
+  const track = d.trackingPoints || [];
+  if (!pts.length && !track.length) return;
   const map = L.map("gps-map");
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors", maxZoom: 19 }).addTo(map);
   pts.forEach((p) => L.marker([p.lat, p.lon]).addTo(map).bindPopup(p.label));
@@ -130,7 +133,14 @@ function initGpsMap(d) {
   if (polyPts.length >= 3) {
     L.polygon(polyPts.map((p) => [p.lat, p.lon]), { color: "#1b5e20", weight: 2, fillOpacity: 0.15 }).addTo(map);
   }
-  const bounds = L.latLngBounds(pts.map((p) => [p.lat, p.lon]));
+  const allLatLngs = pts.map((p) => [p.lat, p.lon]);
+  if (track.length >= 2) {
+    L.polyline(track.map((p) => [p.lat, p.lon]), { color: "#1565c0", weight: 3, dashArray: "6 4" }).addTo(map);
+    L.circleMarker([track[0].lat, track[0].lon], { radius: 6, color: "#1565c0", fillColor: "#1565c0", fillOpacity: 1 }).addTo(map).bindPopup("Départ du suivi");
+    L.circleMarker([track[track.length - 1].lat, track[track.length - 1].lon], { radius: 6, color: "#c62828", fillColor: "#c62828", fillOpacity: 1 }).addTo(map).bindPopup("Dernière position suivie");
+    track.forEach((p) => allLatLngs.push([p.lat, p.lon]));
+  }
+  const bounds = L.latLngBounds(allLatLngs);
   map.fitBounds(bounds, { padding: [30, 30], maxZoom: 18 });
   gpsMapInstance = map;
 }
@@ -465,8 +475,8 @@ function trackingBlock(d) {
       <tr><td style="font-weight:600">Temps total écoulé</td><td id="temps-total-live" style="font-weight:600">${fmtDuration(elapsed)}</td></tr>
     </table>
     <div id="tracking-error" class="error-text" style="display:none"></div>
+    <div class="muted" style="margin-bottom:8px">Le suivi GPS de l'itinéraire démarre automatiquement à l'arrivée sur site et s'arrête à la fin de mission.</div>
     <div class="btn-row" style="margin-top:0">
-      ${!d.trackingActif ? `<button type="button" id="btn-start-tracking">Démarrer le suivi du trajet</button>` : `<button type="button" id="btn-stop-tracking">Arrêter le suivi</button>`}
       <button type="button" id="btn-mark-arrival" ${d.heureArriveeSite ? "disabled" : ""}>Marquer arrivée sur site</button>
     </div></div>`;
 }
@@ -788,6 +798,22 @@ function stopTracking() {
   if (state.watchId != null && navigator.geolocation) { navigator.geolocation.clearWatch(state.watchId); state.watchId = null; }
   if (state.tickInterval) { clearInterval(state.tickInterval); state.tickInterval = null; }
 }
+function startTracking(nd) {
+  if (state.watchId != null || !navigator.geolocation) return;
+  state.watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, t: nowISO() };
+      const pts = nd.trackingPoints;
+      if (pts.length) nd.distanceParcourue += haversine(pts[pts.length - 1].lat, pts[pts.length - 1].lon, pt.lat, pt.lon);
+      pts.push(pt);
+    },
+    (e) => {
+      const err = document.getElementById("tracking-error");
+      if (err) { err.textContent = "Suivi interrompu (" + e.message + ")."; err.style.display = "block"; }
+    },
+    { enableHighAccuracy: true }
+  );
+}
 
 // ---------------- Event wiring ----------------
 function attachFicheHandlers(d) {
@@ -915,29 +941,19 @@ function attachFicheHandlers(d) {
     };
   });
 
-  const startBtn = document.getElementById("btn-start-tracking");
-  if (startBtn) startBtn.onclick = () => {
+  document.getElementById("btn-mark-arrival").onclick = () => {
     const nd = collectFicheForm(d);
     const err = document.getElementById("tracking-error");
     err.style.display = "none";
-    if (!navigator.geolocation) { err.textContent = "Suivi GPS non disponible."; err.style.display = "block"; return; }
-    nd.trackingActif = true; state.editing = nd;
-    state.watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, t: nowISO() };
-        const pts = nd.trackingPoints;
-        if (pts.length) nd.distanceParcourue += haversine(pts[pts.length - 1].lat, pts[pts.length - 1].lon, pt.lat, pt.lon);
-        pts.push(pt);
-      },
-      (e) => { err.textContent = "Suivi interrompu (" + e.message + ")."; err.style.display = "block"; },
-      { enableHighAccuracy: true }
-    );
+    if (!navigator.geolocation) { err.textContent = "Suivi GPS non disponible."; err.style.display = "block"; }
+    nd.heureArriveeSite = nowISO();
+    nd.trackingActif = true;
+    state.editing = nd;
+    startTracking(nd);
     render();
   };
-  const stopBtn = document.getElementById("btn-stop-tracking");
-  if (stopBtn) stopBtn.onclick = () => { const nd = collectFicheForm(d); stopTracking(); nd.trackingActif = false; state.editing = nd; render(); };
-  document.getElementById("btn-mark-arrival").onclick = () => { const nd = collectFicheForm(d); nd.heureArriveeSite = nowISO(); state.editing = nd; render(); };
   document.getElementById("btn-mark-end").onclick = () => { const nd = collectFicheForm(d); stopTracking(); nd.trackingActif = false; nd.heureFinMission = nowISO(); state.editing = nd; render(); };
+  if (d.heureArriveeSite && !d.heureFinMission) startTracking(d);
 
   document.getElementById("btn-save-draft").onclick = async () => {
     const nd = collectFicheForm(d); nd.statut = "brouillon";
