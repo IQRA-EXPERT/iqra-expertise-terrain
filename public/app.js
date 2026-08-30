@@ -1,5 +1,5 @@
 const API = "/api";
-const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null, googleMapsApiKey: "", openMaps: {} };
+const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null, openMaps: {} };
 
 function showConfirm(message) {
   return new Promise((resolve) => {
@@ -99,9 +99,10 @@ function utmString(pt) {
 }
 function mapEmbed(key, lat, lon) {
   if (!state.openMaps[key]) return "";
-  if (!state.googleMapsApiKey) return '<div class="muted" style="margin:6px 0">Carte non configurée (clé Google Maps manquante côté serveur).</div>';
-  const src = `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(state.googleMapsApiKey)}&q=${lat},${lon}&zoom=17`;
-  return `<iframe class="gmap-embed" src="${src}" style="width:100%;height:220px;border:0;border-radius:8px;margin:8px 0" loading="lazy" allowfullscreen></iframe>`;
+  const d = 0.003;
+  const bbox = `${(lon - d).toFixed(6)}%2C${(lat - d).toFixed(6)}%2C${(lon + d).toFixed(6)}%2C${(lat + d).toFixed(6)}`;
+  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`;
+  return `<iframe class="osm-embed" src="${src}" style="width:100%;height:220px;border:0;border-radius:8px;margin:8px 0" loading="lazy"></iframe>`;
 }
 function gpsCoordsTable(d) {
   const pts = [];
@@ -139,9 +140,6 @@ async function loadAll() {
   state.requisitions = await api("/requisitions");
   state.dossiers = await api("/dossiers");
   if (state.role === "expert") state.users = await api("/users");
-  if (!state.googleMapsApiKey) {
-    try { state.googleMapsApiKey = (await api("/config")).googleMapsApiKey || ""; } catch (e) {}
-  }
 }
 async function saveDossier(d) {
   const saved = await api("/dossiers", { method: "POST", body: JSON.stringify(d) });
