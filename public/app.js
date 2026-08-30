@@ -97,20 +97,45 @@ function utmString(pt) {
   const u = toUTM(pt.lat, pt.lon);
   return `Zone ${u.zone}${u.hemisphere} — E ${u.easting} m, N ${u.northing} m`;
 }
-function mapEmbed(key, lat, lon) {
-  if (!state.openMaps[key]) return "";
-  const d = 0.003;
-  const bbox = `${(lon - d).toFixed(6)}%2C${(lat - d).toFixed(6)}%2C${(lon + d).toFixed(6)}%2C${(lat + d).toFixed(6)}`;
-  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`;
-  return `<iframe class="osm-embed" src="${src}" style="width:100%;height:220px;border:0;border-radius:8px;margin:8px 0" loading="lazy"></iframe>`;
-}
-function gpsCoordsTable(d) {
+function gpsPointsListClient(d) {
   const pts = [];
-  if (d.lat != null) pts.push({ label: "Position centrale du site", lat: d.lat, lon: d.lon });
+  if (d.lat != null) pts.push({ key: "site", label: "Position centrale du site", lat: d.lat, lon: d.lon });
   const a = d.gpsAngles || {};
   [["P1", "Point P1"], ["P2", "Point P2"], ["P3", "Point P3"], ["P4", "Point P4"], ["Centre", "Centre de la parcelle"]].forEach(([k, label]) => {
-    if (a[k]) pts.push({ label, lat: a[k].lat, lon: a[k].lon });
+    if (a[k]) pts.push({ key: k, label, lat: a[k].lat, lon: a[k].lon });
   });
+  return pts;
+}
+function gpsMapCard(d) {
+  const pts = gpsPointsListClient(d);
+  if (!pts.length) return "";
+  return `<div class="card">
+    <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})</div>
+    <button type="button" id="btn-toggle-gps-map">${state.openMaps.all ? "Masquer la carte" : "Voir sur la carte"}</button></div>
+    ${state.openMaps.all ? '<div id="gps-map" style="width:100%;height:320px;border-radius:8px"></div>' : ""}
+  </div>`;
+}
+let gpsMapInstance = null;
+function initGpsMap(d) {
+  const container = document.getElementById("gps-map");
+  if (!container || typeof L === "undefined") return;
+  if (gpsMapInstance) { gpsMapInstance.remove(); gpsMapInstance = null; }
+  const pts = gpsPointsListClient(d);
+  if (!pts.length) return;
+  const map = L.map("gps-map");
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors", maxZoom: 19 }).addTo(map);
+  pts.forEach((p) => L.marker([p.lat, p.lon]).addTo(map).bindPopup(p.label));
+  const a = d.gpsAngles || {};
+  const polyPts = ["P1", "P2", "P3", "P4"].map((k) => a[k]).filter(Boolean);
+  if (polyPts.length >= 3) {
+    L.polygon(polyPts.map((p) => [p.lat, p.lon]), { color: "#1b5e20", weight: 2, fillOpacity: 0.15 }).addTo(map);
+  }
+  const bounds = L.latLngBounds(pts.map((p) => [p.lat, p.lon]));
+  map.fitBounds(bounds, { padding: [30, 30], maxZoom: 18 });
+  gpsMapInstance = map;
+}
+function gpsCoordsTable(d) {
+  const pts = gpsPointsListClient(d);
   if (!pts.length) return "";
   const rows = pts
     .map((p) => {
@@ -348,11 +373,7 @@ function photoGallery(photos) {
 }
 function gpsPointRow(label, key, pt) {
   return `<div class="gps-point-row"><div>${label}${pt ? `<div class="muted">${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}</div><div class="muted">${utmString(pt)}</div>` : ""}</div>
-    <div class="btn-row" style="gap:6px;margin-top:0">
-      ${pt ? `<button type="button" class="btn-toggle-map" data-key="${key}">${state.openMaps[key] ? "Masquer la carte" : "Voir sur la carte"}</button>` : ""}
-      <button type="button" class="btn-cap-angle" data-key="${key}">${pt ? "Reprendre" : "Capturer"}</button>
-    </div></div>
-    ${pt ? mapEmbed(key, pt.lat, pt.lon) : ""}`;
+    <button type="button" class="btn-cap-angle" data-key="${key}">${pt ? "Reprendre" : "Capturer"}</button></div>`;
 }
 function locBlock(d) {
   const hasLoc = d.lat != null;
@@ -364,11 +385,7 @@ function locBlock(d) {
     ${hasLoc ? `<table class="info-table">
       <tr><td>Latitude / Longitude</td><td>${d.lat.toFixed(6)}, ${d.lon.toFixed(6)}</td></tr>
       <tr><td>UTM (WGS84)</td><td>Zone ${u.zone}${u.hemisphere} — E ${u.easting} m, N ${u.northing} m</td></tr></table>
-      <div class="btn-row" style="gap:6px;margin-top:6px">
-        <button type="button" class="btn-toggle-map" data-key="site">${state.openMaps.site ? "Masquer la carte" : "Voir sur la carte"}</button>
-        <a class="link" href="https://www.google.com/maps/@${d.lat},${d.lon},400m/data=!3m1!1e3" target="_blank">Voir la vue satellite (Google Maps) ↗</a>
-      </div>
-      ${mapEmbed("site", d.lat, d.lon)}`
+      <a class="link" href="https://www.google.com/maps/@${d.lat},${d.lon},400m/data=!3m1!1e3" target="_blank">Voir la vue satellite (Google Maps) ↗</a>`
       : '<div class="muted">Aucune position capturée.</div>'}
   </div>`;
 }
@@ -486,6 +503,7 @@ function screenFicheForm(d) {
     ${field("Adresse / repère", "f-adresse", d.adresse)}
     ${locBlock(d)}
     ${anglesBlock(d)}
+    ${gpsMapCard(d)}
     ${gpsCoordsTable(d)}
     ${field("Longueur de la parcelle (m)", "f-longueurParcelle", d.longueurParcelle, { showOptional: true })}
     ${field("Largeur de la parcelle (m)", "f-largeurParcelle", d.largeurParcelle, { showOptional: true })}
@@ -841,14 +859,15 @@ function attachFicheHandlers(d) {
       );
     };
   });
-  document.querySelectorAll(".btn-toggle-map").forEach((btn) => {
-    btn.onclick = () => {
-      const key = btn.getAttribute("data-key");
-      state.openMaps[key] = !state.openMaps[key];
+  const toggleMapBtn = document.getElementById("btn-toggle-gps-map");
+  if (toggleMapBtn) {
+    toggleMapBtn.onclick = () => {
+      state.openMaps.all = !state.openMaps.all;
       state.editing = collectFicheForm(d);
       render();
     };
-  });
+  }
+  if (state.openMaps.all) initGpsMap(d);
   document.getElementById("btn-add-piece").onclick = () => {
     const nd = collectFicheForm(d);
     nd.pieces.push({ id: uid(), niveau: "RDC", designation: "", longueur: "", largeur: "", quantite: "1", superficie: "" });
