@@ -1,5 +1,5 @@
 const API = "/api";
-const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null, openMaps: {} };
+const state = { user: null, role: null, agentName: "", dossiers: [], requisitions: [], users: [], activeDossierId: null, editing: null, previewMode: false, watchId: null, tickInterval: null, newRequisition: null, managingUsers: false, filterAgent: "", filterStatut: "", editingUserId: null, openMaps: {}, viewingDossierId: null };
 
 function showConfirm(message) {
   return new Promise((resolve) => {
@@ -378,7 +378,7 @@ function screenAgentHome() {
       <button style="pointer-events:none">Démarrer</button></div>`).join("")}
     <div class="section-title">Mes fiches (${mine.length})</div>
     ${mine.length === 0 ? '<div class="muted">Aucune fiche pour le moment.</div>' : mine.map((d) => `
-      <div class="list-row mine-row" data-id="${d.id}" style="cursor:${d.statut === "brouillon" || d.statut === "envoye" ? "pointer" : "default"}">
+      <div class="list-row mine-row" data-id="${d.id}" style="cursor:pointer">
       <div><div style="font-weight:600">${esc(d.numeroRapport) || "(sans n°)"} — ${esc(d.nomSite || d.commune) || "?"}</div>
       <div class="muted">${d.dateVisite} · ${d.photos.length} photo(s) · ${(d.distanceParcourue / 1000).toFixed(2)} km</div></div>
       <div style="display:flex;align-items:center;gap:8px">${statusBadge(d.statut)}<button type="button" class="btn-delete-mine" data-id="${d.id}" aria-label="Supprimer">✕</button></div></div>`).join("")}
@@ -433,20 +433,29 @@ async function openCameraCapture(d) {
   overlay.id = "camera-overlay";
   overlay.style.cssText = "position:fixed;inset:0;background:#000;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center";
   overlay.innerHTML = `
-    <video id="camera-video" autoplay playsinline style="max-width:100%;max-height:80vh;background:#000"></video>
+    <div id="camera-status" class="muted" style="color:#ccc;margin-bottom:8px">Ouverture de la caméra…</div>
+    <video id="camera-video" autoplay playsinline muted style="max-width:100%;max-height:80vh;background:#000"></video>
     <div class="btn-row" style="margin-top:16px">
       <button type="button" id="btn-camera-cancel">Annuler</button>
-      <button type="button" id="btn-camera-capture" class="accent">📸 Capturer</button>
+      <button type="button" id="btn-camera-capture" class="accent" disabled>📸 Capturer</button>
     </div>`;
   document.body.appendChild(overlay);
   const video = document.getElementById("camera-video");
-  video.srcObject = stream;
+  const captureBtn = document.getElementById("btn-camera-capture");
+  const statusEl = document.getElementById("camera-status");
   const cleanup = () => {
     stream.getTracks().forEach((t) => t.stop());
     overlay.remove();
   };
   document.getElementById("btn-camera-cancel").onclick = cleanup;
-  document.getElementById("btn-camera-capture").onclick = () => {
+  video.srcObject = stream;
+  video.onloadedmetadata = () => {
+    video.play().catch(() => {});
+    statusEl.textContent = "";
+    captureBtn.disabled = false;
+  };
+  captureBtn.onclick = () => {
+    if (!video.videoWidth || !video.videoHeight) return;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -697,6 +706,16 @@ function screenPreview(d) {
       <button type="button" id="btn-share-whatsapp">📤 Partager par WhatsApp</button>
       <button class="accent" id="btn-confirm-send">Confirmer l'envoi à l'expert</button>
       <span id="send-confirm-check" class="badge badge-ok" style="display:none">✓ Envoyé</span>
+    </div></div>`;
+}
+function screenAgentReportView(d) {
+  return `<div><button id="btn-back-agent-view" style="margin-bottom:1rem">← Retour</button>
+    <div class="row-between" style="margin-bottom:16px"><h2 style="font-size:17px;margin:0">Rapport envoyé</h2>${statusBadge(d.statut)}</div>
+    ${previewHTML(d, "agent")}
+    <div class="btn-row">
+      <button type="button" id="btn-view-download-pdf">⬇ Rapport PDF officiel (numéroté)</button>
+      <button type="button" id="btn-view-download-docx">⬇ Rapport Word (.docx)</button>
+      <button type="button" id="btn-view-share-whatsapp">📤 Partager par WhatsApp</button>
     </div></div>`;
 }
 
@@ -1060,7 +1079,7 @@ async function doLogout() {
   try { await fetch(`${API}/logout`, { method: "POST" }); } catch (e) {}
   state.user = null; state.role = null; state.agentName = "";
   state.dossiers = []; state.requisitions = []; state.users = [];
-  state.editing = null; state.activeDossierId = null; state.newRequisition = null; state.managingUsers = false;
+  state.editing = null; state.activeDossierId = null; state.viewingDossierId = null; state.newRequisition = null; state.managingUsers = false;
   render();
 }
 
@@ -1116,6 +1135,16 @@ async function render() {
   }
 
   if (state.role === "agent") {
+    if (state.viewingDossierId) {
+      const d = state.dossiers.find((x) => x.id === state.viewingDossierId);
+      if (!d) { state.viewingDossierId = null; render(); return; }
+      app.innerHTML = screenAgentReportView(d);
+      document.getElementById("btn-back-agent-view").onclick = () => { state.viewingDossierId = null; render(); };
+      document.getElementById("btn-view-download-pdf").onclick = () => window.open(`${API}/dossiers/${d.id}/report.pdf`, "_blank");
+      document.getElementById("btn-view-download-docx").onclick = () => window.open(`${API}/dossiers/${d.id}/report.docx`, "_blank");
+      document.getElementById("btn-view-share-whatsapp").onclick = () => shareReportViaWhatsApp(d);
+      return;
+    }
     if (state.editing && state.previewMode) {
       app.innerHTML = screenPreview(state.editing);
       document.getElementById("btn-back-to-edit").onclick = () => { state.previewMode = false; render(); };
@@ -1166,7 +1195,9 @@ async function render() {
     document.querySelectorAll(".mine-row").forEach((row) => {
       row.onclick = () => {
         const d = state.dossiers.find((x) => x.id === row.getAttribute("data-id"));
-        if (d && (d.statut === "brouillon" || d.statut === "envoye")) { state.editing = d; render(); }
+        if (!d) return;
+        if (d.statut === "brouillon" || d.statut === "envoye") { state.editing = d; render(); }
+        else { state.viewingDossierId = d.id; render(); }
       };
       const delBtn = row.querySelector(".btn-delete-mine");
       if (delBtn) delBtn.onclick = async (e) => {
