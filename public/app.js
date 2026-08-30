@@ -413,21 +413,25 @@ async function uploadPhotoBlob(nd, blob, filename) {
   state.editing = nd;
   render();
 }
+async function requestCameraStream(facing) {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } } });
+  } catch (e) {
+    return await navigator.mediaDevices.getUserMedia({ video: true });
+  }
+}
 async function openCameraCapture(d) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     document.getElementById("f-photo-input").click();
     return;
   }
+  let facing = "environment";
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
-  } catch (e1) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    } catch (e2) {
-      document.getElementById("f-photo-input").click();
-      return;
-    }
+    stream = await requestCameraStream(facing);
+  } catch (e) {
+    document.getElementById("f-photo-input").click();
+    return;
   }
   const overlay = document.createElement("div");
   overlay.id = "camera-overlay";
@@ -437,23 +441,42 @@ async function openCameraCapture(d) {
     <video id="camera-video" autoplay playsinline muted style="max-width:100%;max-height:80vh;background:#000"></video>
     <div class="btn-row" style="margin-top:16px">
       <button type="button" id="btn-camera-cancel">Annuler</button>
+      <button type="button" id="btn-camera-switch">🔄 Face / Arrière</button>
       <button type="button" id="btn-camera-capture" class="accent" disabled>📸 Capturer</button>
     </div>`;
   document.body.appendChild(overlay);
   const video = document.getElementById("camera-video");
   const captureBtn = document.getElementById("btn-camera-capture");
+  const switchBtn = document.getElementById("btn-camera-switch");
   const statusEl = document.getElementById("camera-status");
   const cleanup = () => {
     stream.getTracks().forEach((t) => t.stop());
     overlay.remove();
   };
-  document.getElementById("btn-camera-cancel").onclick = cleanup;
-  video.srcObject = stream;
-  video.onloadedmetadata = () => {
-    video.play().catch(() => {});
-    statusEl.textContent = "";
-    captureBtn.disabled = false;
+  const attachStream = (s) => {
+    stream = s;
+    video.srcObject = stream;
+    captureBtn.disabled = true;
+    statusEl.textContent = "Ouverture de la caméra…";
+    video.onloadedmetadata = () => {
+      video.play().catch(() => {});
+      statusEl.textContent = "";
+      captureBtn.disabled = false;
+    };
   };
+  document.getElementById("btn-camera-cancel").onclick = cleanup;
+  switchBtn.onclick = async () => {
+    facing = facing === "environment" ? "user" : "environment";
+    switchBtn.disabled = true;
+    stream.getTracks().forEach((t) => t.stop());
+    try {
+      attachStream(await requestCameraStream(facing));
+    } catch (e) {
+      statusEl.textContent = "Impossible de changer de caméra.";
+    }
+    switchBtn.disabled = false;
+  };
+  attachStream(stream);
   captureBtn.onclick = () => {
     if (!video.videoWidth || !video.videoHeight) return;
     const canvas = document.createElement("canvas");
