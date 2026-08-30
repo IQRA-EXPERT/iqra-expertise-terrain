@@ -420,10 +420,14 @@ async function openCameraCapture(d) {
   }
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-  } catch (e) {
-    document.getElementById("f-photo-input").click();
-    return;
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
+  } catch (e1) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch (e2) {
+      document.getElementById("f-photo-input").click();
+      return;
+    }
   }
   const overlay = document.createElement("div");
   overlay.id = "camera-overlay";
@@ -871,13 +875,15 @@ function stopTracking() {
   if (state.watchId != null && navigator.geolocation) { navigator.geolocation.clearWatch(state.watchId); state.watchId = null; }
   if (state.tickInterval) { clearInterval(state.tickInterval); state.tickInterval = null; }
 }
-function startTracking(nd) {
+function startTracking() {
   if (state.watchId != null || !navigator.geolocation) return;
   state.watchId = navigator.geolocation.watchPosition(
     (pos) => {
+      const cur = state.editing;
+      if (!cur) return;
       const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, t: nowISO() };
-      const pts = nd.trackingPoints;
-      if (pts.length) nd.distanceParcourue += haversine(pts[pts.length - 1].lat, pts[pts.length - 1].lon, pt.lat, pt.lon);
+      const pts = cur.trackingPoints;
+      if (pts.length) cur.distanceParcourue += haversine(pts[pts.length - 1].lat, pts[pts.length - 1].lon, pt.lat, pt.lon);
       pts.push(pt);
     },
     (e) => {
@@ -1016,11 +1022,11 @@ function attachFicheHandlers(d) {
     nd.heureArriveeSite = nowISO();
     nd.trackingActif = true;
     state.editing = nd;
-    startTracking(nd);
+    startTracking();
     render();
   };
   document.getElementById("btn-mark-end").onclick = () => { const nd = collectFicheForm(d); stopTracking(); nd.trackingActif = false; nd.heureFinMission = nowISO(); state.editing = nd; render(); };
-  if (d.heureArriveeSite && !d.heureFinMission) startTracking(d);
+  if (d.heureArriveeSite && !d.heureFinMission) startTracking();
 
   document.getElementById("btn-save-draft").onclick = async () => {
     const nd = collectFicheForm(d); nd.statut = "brouillon";
