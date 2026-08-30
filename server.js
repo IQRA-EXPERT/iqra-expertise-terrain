@@ -846,6 +846,64 @@ app.get("/api/dossiers/:id/report.pdf", ah(async (req, res) => {
   res.end(buffer);
 }));
 
+function xmlEscape(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function generateKml(d) {
+  const points = gpsPointsList(d);
+  const placemarks = points
+    .map(
+      (p) => `    <Placemark>
+      <name>${xmlEscape(p.label)}</name>
+      <description>UTM Zone ${p.utm.zone}${p.utm.hemisphere} — E ${p.utm.easting} m, N ${p.utm.northing} m</description>
+      <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>
+    </Placemark>`
+    )
+    .join("\n");
+
+  const a = d.gpsAngles || {};
+  const polyPts = ["P1", "P2", "P3", "P4"].map((k) => a[k]).filter((p) => p && p.lat != null && p.lon != null);
+  const polygon =
+    polyPts.length >= 3
+      ? `    <Placemark>
+      <name>Périmètre de la parcelle</name>
+      <Style><LineStyle><color>ff205e1b</color><width>2</width></LineStyle><PolyStyle><color>4d205e1b</color></PolyStyle></Style>
+      <Polygon><outerBoundaryIs><LinearRing><coordinates>${polyPts.map((p) => `${p.lon},${p.lat},0`).join(" ")} ${polyPts[0].lon},${polyPts[0].lat},0</coordinates></LinearRing></outerBoundaryIs></Polygon>
+    </Placemark>`
+      : "";
+
+  const track = (d.trackingPoints || []).filter((p) => p.lat != null && p.lon != null);
+  const trackLine =
+    track.length >= 2
+      ? `    <Placemark>
+      <name>Itinéraire parcouru (${(d.distanceParcourue / 1000).toFixed(2)} km)</name>
+      <Style><LineStyle><color>ffc06515</color><width>3</width></LineStyle></Style>
+      <LineString><tessellate>1</tessellate><coordinates>${track.map((p) => `${p.lon},${p.lat},0`).join(" ")}</coordinates></LineString>
+    </Placemark>`
+      : "";
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${xmlEscape(d.numeroRapport || d.nomSite || d.commune || "Dossier IQRA EXPERT")}</name>
+${placemarks}
+${polygon}
+${trackLine}
+  </Document>
+</kml>`;
+}
+
+app.get("/api/dossiers/:id/coordinates.kml", (req, res) => {
+  const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Introuvable" });
+  const d = rowToDossier(row);
+  const kml = generateKml(d);
+  const filename = `coordonnees-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.kml`;
+  res.setHeader("Content-Type", "application/vnd.google-earth.kml+xml");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.end(kml);
+});
+
 // =========================================================
 // API: Base de prix de référence (expertises terminées)
 // =========================================================

@@ -115,6 +115,7 @@ function gpsMapCard(d) {
     <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})${trackLabel}</div>
     <button type="button" id="btn-toggle-gps-map">${state.openMaps.all ? "Masquer la carte" : "Voir sur la carte"}</button></div>
     ${state.openMaps.all ? '<div id="gps-map" style="width:100%;height:320px;border-radius:8px"></div>' : ""}
+    ${d.id ? `<a class="link" style="display:inline-block;margin-top:8px" href="${API}/dossiers/${d.id}/coordinates.kml" target="_blank">🌍 Ouvrir sur Google Earth (fichier .kml) ↗</a>` : '<div class="muted" style="margin-top:8px">Enregistrez le dossier pour obtenir le lien Google Earth.</div>'}
   </div>`;
 }
 let gpsMapInstance = null;
