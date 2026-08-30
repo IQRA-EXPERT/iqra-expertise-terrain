@@ -109,10 +109,12 @@ function gpsPointsListClient(d) {
 function gpsMapCard(d) {
   const pts = gpsPointsListClient(d);
   const track = d.trackingPoints || [];
-  if (!pts.length && !track.length) return "";
+  const geoPhotos = (d.photos || []).filter((p) => p.lat != null && p.lon != null);
+  if (!pts.length && !track.length && !geoPhotos.length) return "";
   const trackLabel = track.length ? ` · itinéraire ${(d.distanceParcourue / 1000).toFixed(2)} km (${track.length} pts)` : "";
+  const photoLabel = geoPhotos.length ? ` · ${geoPhotos.length} photo(s) géolocalisée(s)` : "";
   return `<div class="card">
-    <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})${trackLabel}</div>
+    <div class="row-between" style="margin-bottom:8px"><div style="font-weight:600;font-size:13px">Carte des points GPS (${pts.length})${trackLabel}${photoLabel}</div>
     <button type="button" id="btn-toggle-gps-map">${state.openMaps.all ? "Masquer la carte" : "Voir sur la carte"}</button></div>
     ${state.openMaps.all ? '<div id="gps-map" style="width:100%;height:320px;border-radius:8px"></div>' : ""}
     ${d.id ? `<a class="link" style="display:inline-block;margin-top:8px" href="${API}/dossiers/${d.id}/coordinates.kml" target="_blank">🌍 Ouvrir sur Google Earth (fichier .kml) ↗</a>` : '<div class="muted" style="margin-top:8px">Enregistrez le dossier pour obtenir le lien Google Earth.</div>'}
@@ -125,7 +127,8 @@ function initGpsMap(d) {
   if (gpsMapInstance) { gpsMapInstance.remove(); gpsMapInstance = null; }
   const pts = gpsPointsListClient(d);
   const track = d.trackingPoints || [];
-  if (!pts.length && !track.length) return;
+  const geoPhotos = (d.photos || []).filter((p) => p.lat != null && p.lon != null);
+  if (!pts.length && !track.length && !geoPhotos.length) return;
   const map = L.map("gps-map");
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors", maxZoom: 19 }).addTo(map);
   pts.forEach((p) => L.marker([p.lat, p.lon]).addTo(map).bindPopup(p.label));
@@ -141,6 +144,12 @@ function initGpsMap(d) {
     L.circleMarker([track[track.length - 1].lat, track[track.length - 1].lon], { radius: 6, color: "#c62828", fillColor: "#c62828", fillOpacity: 1 }).addTo(map).bindPopup("Dernière position suivie");
     track.forEach((p) => allLatLngs.push([p.lat, p.lon]));
   }
+  geoPhotos.forEach((p, i) => {
+    L.circleMarker([p.lat, p.lon], { radius: 7, color: "#e65100", fillColor: "#ff9800", fillOpacity: 1, weight: 2 })
+      .addTo(map)
+      .bindPopup(`<img src="${p.url}" style="width:160px;display:block;margin-bottom:4px"/>Photo ${i + 1}`);
+    allLatLngs.push([p.lat, p.lon]);
+  });
   const bounds = L.latLngBounds(allLatLngs);
   map.fitBounds(bounds, { padding: [30, 30], maxZoom: 18 });
   gpsMapInstance = map;
@@ -379,8 +388,71 @@ function screenAgentHome() {
 function photoGallery(photos) {
   const body = !photos.length ? '<div class="muted" style="margin-bottom:4px">Aucune photo pour le moment.</div>' :
     `<div class="photo-grid">${photos.map((p) => `<div class="photo-thumb"><img src="${p.url}" />
+      ${p.lat != null ? `<span class="muted" style="position:absolute;left:4px;bottom:4px;font-size:11px;background:rgba(255,255,255,.85);border-radius:4px;padding:0 3px" title="Géolocalisée">📍</span>` : ""}
       <button class="photo-del" data-pid="${p.id}" aria-label="Supprimer">✕</button></div>`).join("")}</div>`;
   return body + '<div class="muted" style="font-style:italic;margin-bottom:8px">Images IQRA-EXPERT</div>';
+}
+function getCurrentPositionBestEffort() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+    );
+  });
+}
+async function uploadPhotoBlob(nd, blob, filename) {
+  if (!nd.id) { nd = await saveDossier(nd); }
+  const geo = await getCurrentPositionBestEffort();
+  const fd = new FormData();
+  fd.append("photo", blob, filename);
+  if (geo) { fd.append("lat", geo.lat); fd.append("lon", geo.lon); }
+  const photo = await fetch(`${API}/dossiers/${nd.id}/photos`, { method: "POST", body: fd }).then((r) => r.json());
+  nd.photos = [...nd.photos, photo];
+  state.editing = nd;
+  render();
+}
+async function openCameraCapture(d) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    document.getElementById("f-photo-input").click();
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch (e) {
+    document.getElementById("f-photo-input").click();
+    return;
+  }
+  const overlay = document.createElement("div");
+  overlay.id = "camera-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:#000;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center";
+  overlay.innerHTML = `
+    <video id="camera-video" autoplay playsinline style="max-width:100%;max-height:80vh;background:#000"></video>
+    <div class="btn-row" style="margin-top:16px">
+      <button type="button" id="btn-camera-cancel">Annuler</button>
+      <button type="button" id="btn-camera-capture" class="accent">📸 Capturer</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const video = document.getElementById("camera-video");
+  video.srcObject = stream;
+  const cleanup = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    overlay.remove();
+  };
+  document.getElementById("btn-camera-cancel").onclick = cleanup;
+  document.getElementById("btn-camera-capture").onclick = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    cleanup();
+    canvas.toBlob(async (blob) => {
+      const nd = collectFicheForm(d);
+      await uploadPhotoBlob(nd, blob, `photo-${Date.now()}.jpg`);
+    }, "image/jpeg", 0.9);
+  };
 }
 function gpsPointRow(label, key, pt) {
   return `<div class="gps-point-row"><div>${label}${pt ? `<div class="muted">${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}</div><div class="muted">${utmString(pt)}</div>` : ""}</div>
@@ -918,19 +990,13 @@ function attachFicheHandlers(d) {
     row.querySelector(".pc-quantite").oninput = (e) => (p.quantite = e.target.value);
   });
 
-  document.getElementById("btn-take-photo").onclick = () => {
-    document.getElementById("f-photo-input").click();
-  };
+  document.getElementById("btn-take-photo").onclick = () => openCameraCapture(collectFicheForm(d));
   document.getElementById("f-photo-input").onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    let nd = collectFicheForm(d);
-    if (!nd.id) nd = await saveDossier(nd);
-    const fd = new FormData();
-    fd.append("photo", file);
-    const photo = await fetch(`${API}/dossiers/${nd.id}/photos`, { method: "POST", body: fd }).then((r) => r.json());
-    nd.photos = [...nd.photos, photo];
-    state.editing = nd; render();
+    const nd = collectFicheForm(d);
+    await uploadPhotoBlob(nd, file, file.name);
+    e.target.value = "";
   };
   document.querySelectorAll(".photo-del").forEach((btn) => {
     btn.onclick = async () => {

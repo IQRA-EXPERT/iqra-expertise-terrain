@@ -99,6 +99,8 @@ ensureColumn("users", "qualification", "TEXT");
 ensureColumn("requisitions", "fichierRequisitionPath", "TEXT");
 ensureColumn("requisitions", "assignedAgent", "TEXT");
 ensureColumn("requisitions", "vuParAgentAt", "TEXT");
+ensureColumn("photos", "lat", "REAL");
+ensureColumn("photos", "lon", "REAL");
 
 // ---------- Uploads (photos) ----------
 const storage = multer.diskStorage({
@@ -312,7 +314,7 @@ function rowToRequisition(r) {
 }
 function rowToDossier(row) {
   if (!row) return null;
-  const photos = db.prepare("SELECT id, filename, t FROM photos WHERE dossierId = ? ORDER BY t").all(row.id);
+  const photos = db.prepare("SELECT id, filename, t, lat, lon FROM photos WHERE dossierId = ? ORDER BY t").all(row.id);
   return {
     ...row,
     equipe: JSON.parse(row.equipeJson || "[]"),
@@ -324,7 +326,7 @@ function rowToDossier(row) {
     pieces: JSON.parse(row.piecesJson || "[]"),
     annexes: JSON.parse(row.annexesJson || "{}"),
     trackingPoints: JSON.parse(row.trackingPointsJson || "[]"),
-    photos: photos.map((p) => ({ id: p.id, url: `/uploads/${p.filename}`, t: p.t })),
+    photos: photos.map((p) => ({ id: p.id, url: `/uploads/${p.filename}`, t: p.t, lat: p.lat, lon: p.lon })),
   };
 }
 
@@ -849,7 +851,7 @@ app.get("/api/dossiers/:id/report.pdf", ah(async (req, res) => {
 function xmlEscape(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
-function generateKml(d) {
+function generateKml(d, baseUrl) {
   const points = gpsPointsList(d);
   const placemarks = points
     .map(
@@ -882,6 +884,18 @@ function generateKml(d) {
     </Placemark>`
       : "";
 
+  const geoPhotos = (d.photos || []).filter((p) => p.lat != null && p.lon != null);
+  const photoPlacemarks = geoPhotos
+    .map((p, i) => {
+      const url = `${baseUrl}${p.url}`;
+      return `    <Placemark>
+      <name>Photo ${i + 1}</name>
+      <description><![CDATA[<a href="${url}">Voir la photo (connexion requise) ↗</a>]]></description>
+      <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>
+    </Placemark>`;
+    })
+    .join("\n");
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
@@ -889,6 +903,7 @@ function generateKml(d) {
 ${placemarks}
 ${polygon}
 ${trackLine}
+${photoPlacemarks}
   </Document>
 </kml>`;
 }
@@ -897,7 +912,8 @@ app.get("/api/dossiers/:id/coordinates.kml", (req, res) => {
   const row = db.prepare("SELECT * FROM dossiers WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Introuvable" });
   const d = rowToDossier(row);
-  const kml = generateKml(d);
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  const kml = generateKml(d, baseUrl);
   const filename = `coordonnees-${(d.numeroRapport || d.id).replace(/[^a-zA-Z0-9-_]/g, "_")}.kml`;
   res.setHeader("Content-Type", "application/vnd.google-earth.kml+xml");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -1049,9 +1065,11 @@ app.post("/api/dossiers", ah(async (req, res) => {
 
 app.post("/api/dossiers/:id/photos", upload.single("photo"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Aucun fichier reçu" });
-  const photo = { id: uid(), dossierId: req.params.id, filename: req.file.filename, t: nowISO() };
-  db.prepare("INSERT INTO photos (id, dossierId, filename, t) VALUES (@id,@dossierId,@filename,@t)").run(photo);
-  res.json({ id: photo.id, url: `/uploads/${photo.filename}`, t: photo.t });
+  const lat = req.body.lat ? parseFloat(req.body.lat) : null;
+  const lon = req.body.lon ? parseFloat(req.body.lon) : null;
+  const photo = { id: uid(), dossierId: req.params.id, filename: req.file.filename, t: nowISO(), lat, lon };
+  db.prepare("INSERT INTO photos (id, dossierId, filename, t, lat, lon) VALUES (@id,@dossierId,@filename,@t,@lat,@lon)").run(photo);
+  res.json({ id: photo.id, url: `/uploads/${photo.filename}`, t: photo.t, lat, lon });
 });
 
 app.delete("/api/photos/:id", (req, res) => {
